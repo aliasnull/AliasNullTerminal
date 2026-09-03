@@ -1,17 +1,24 @@
 // AliasNull native runtime bootstrap.
 //
 // THIS IS NOT A SHELL AND NOT A LINUX RUNTIME. This translation unit implements
-// only the bootstrap foundation of the future AliasNull native runtime:
+// the bootstrap foundation of the future AliasNull native runtime plus a small,
+// honest process/PTY *foundation*:
 //
 //   * initializeNativeRuntime  - validate the runtime root supplied by the app,
 //                                verify the runtime-owned subdirectories exist
 //                                and are writable, then record an honest
 //                                "initialized" state.
 //   * shutdownNativeRuntime    - release/clear the recorded bootstrap state.
+//   * create/state/count/close - lifecycle of opaque runtime "session slots".
+//                                A session is a placeholder identity with a
+//                                lifecycle state. It is NOT an OS process and NOT
+//                                a PTY: creating one never spawns anything, and a
+//                                session never reports RUNNING in this phase.
 //   * runtime/version/capabilities - expose only metadata that is genuinely real.
 //
-// No command is parsed or executed here. Command execution, stdin/stdout/stderr,
-// the PTY and the Linux userspace are future phases and must not be simulated.
+// No command is parsed or executed here, and no process, fork, PTY, shell,
+// stdin/stdout/stderr or Linux userspace is created or simulated. Those are
+// future phases and a session slot must never be mistaken for any of them.
 //
 // JNI symbols use the standard mangled form of the Kotlin object
 // NativeRuntimeBridge in package app.aliasnull.shell.runtime.native. These are
@@ -21,8 +28,10 @@
 #include <android/log.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 
 #include <sys/stat.h>
 #include <unistd.h>
@@ -50,14 +59,34 @@ constexpr const char* kRequiredSubdirs[] = {"state", "tmp", "metadata"};
 constexpr size_t kRequiredSubdirCount = 3;
 
 constexpr const char* kRuntimeVersion = "0.1.0";   // AliasNull native runtime version
-constexpr const char* kBootstrapVersion = "1";     // this bootstrap foundation version
+constexpr const char* kBootstrapVersion = "2";     // bootstrap foundation version (2 adds the session foundation)
 constexpr const char* kCapabilities =
-    "nativeBootstrap,runtimeDirectoryValidation";  // only what is genuinely implemented
+    "nativeBootstrap,runtimeDirectoryValidation,nativeSessionFoundation";  // only what is genuinely implemented
+
+// Session-layer result/state codes returned across JNI. State values form the
+// declared lifecycle vocabulary of a foundation session slot. Only READY and
+// CLOSED are reachable in this phase: STARTING and RUNNING are reserved for the
+// future real process/PTY phase and must never be set here.
+constexpr jint kSessionStateUninitialized = 0;
+constexpr jint kSessionStateReady = 1;
+constexpr jint kSessionStateStarting = 2;  // reserved - never set by this foundation
+constexpr jint kSessionStateRunning = 3;   // reserved - never set by this foundation
+constexpr jint kSessionStateClosed = 4;
+constexpr jint kSessionStateError = 5;
+constexpr jint kSessionNotFound = -1;        // query for an id that has no live session
+constexpr jint kSessionLayerStopped = -2;    // close requested after the layer shut down
 
 std::mutex gMutex;
 bool gInitialized = false;
 bool gShutdown = false;
 std::string gRuntimeRoot;
+
+// Session-slot foundation state. Sessions are opaque placeholder identities for a
+// future execution backend; nothing is forked or spawned when one is created.
+// gNextSessionId is monotonic and never reused so ids stay stable and opaque.
+std::mutex gSessionMutex;
+std::unordered_map<int64_t, jint> gSessions;  // live session id -> lifecycle state
+int64_t gNextSessionId = 1;
 
 bool isDirectory(const std::string& path) {
     struct stat st {};
@@ -102,6 +131,58 @@ void shutdownNative() {
     }
 }
 
+// Creates one placeholder session slot. Returns its stable opaque id, or 0 when
+// the runtime is not bootstrapped/shut down or the slot could not be reserved.
+// The slot starts in READY ("awaiting a future execution binding"); it never
+// spawns anything and never transitions to RUNNING in this phase.
+int64_t createSession() {
+    {
+        std::lock_guard<std::mutex> guard(gMutex);
+        if (!gInitialized || gShutdown) return 0;
+    }
+    std::lock_guard<std::mutex> guard(gSessionMutex);
+    const int64_t id = gNextSessionId++;
+    gSessions.emplace(id, kSessionStateReady);
+    LOGI("AliasNull foundation session created: id=%lld state=READY (placeholder; nothing is running)",
+         static_cast<long long>(id));
+    return id;
+}
+
+// Lifecycle state of a live session, or kSessionNotFound for an id with no live
+// session (never created, or already closed and removed).
+jint sessionState(int64_t id) {
+    std::lock_guard<std::mutex> guard(gSessionMutex);
+    const auto it = gSessions.find(id);
+    if (it == gSessions.end()) return kSessionNotFound;
+    return it->second;
+}
+
+// Number of currently live session slots. Returns 0 once every slot is closed.
+jint activeSessionCount() {
+    std::lock_guard<std::mutex> guard(gSessionMutex);
+    return static_cast<jint>(gSessions.size());
+}
+
+// Closes a session slot deterministically. A live slot is removed and retired;
+// an unknown or already-closed id is an idempotent no-op (both return 0). The
+// only non-zero return means the session layer has already been shut down.
+jint closeSession(int64_t id) {
+    {
+        std::lock_guard<std::mutex> guard(gMutex);
+        if (gShutdown) return kSessionLayerStopped;
+    }
+    std::lock_guard<std::mutex> guard(gSessionMutex);
+    const auto it = gSessions.find(id);
+    if (it == gSessions.end()) {
+        LOGI("AliasNull foundation session close: id=%lld already closed or unknown (no-op)",
+             static_cast<long long>(id));
+        return 0;
+    }
+    gSessions.erase(it);
+    LOGI("AliasNull foundation session closed: id=%lld", static_cast<long long>(id));
+    return 0;
+}
+
 }  // namespace
 
 extern "C" {
@@ -143,6 +224,30 @@ JNIEXPORT jstring JNICALL
 Java_app_aliasnull_shell_runtime_native_NativeRuntimeBridge_nativeCapabilities(
     JNIEnv* env, jobject /*thiz*/) {
     return env->NewStringUTF(kCapabilities);
+}
+
+JNIEXPORT jlong JNICALL
+Java_app_aliasnull_shell_runtime_native_NativeRuntimeBridge_nativeCreateSession(
+    JNIEnv* /*env*/, jobject /*thiz*/) {
+    return static_cast<jlong>(createSession());
+}
+
+JNIEXPORT jint JNICALL
+Java_app_aliasnull_shell_runtime_native_NativeRuntimeBridge_nativeSessionState(
+    JNIEnv* /*env*/, jobject /*thiz*/, jlong sessionId) {
+    return sessionState(static_cast<int64_t>(sessionId));
+}
+
+JNIEXPORT jint JNICALL
+Java_app_aliasnull_shell_runtime_native_NativeRuntimeBridge_nativeActiveSessionCount(
+    JNIEnv* /*env*/, jobject /*thiz*/) {
+    return activeSessionCount();
+}
+
+JNIEXPORT jint JNICALL
+Java_app_aliasnull_shell_runtime_native_NativeRuntimeBridge_nativeCloseSession(
+    JNIEnv* /*env*/, jobject /*thiz*/, jlong sessionId) {
+    return closeSession(static_cast<int64_t>(sessionId));
 }
 
 }  // extern "C"

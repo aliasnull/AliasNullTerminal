@@ -13,6 +13,11 @@ import android.util.Log
  * app start, and a load failure is reported as a structured
  * [NativeRuntimeResult] instead of crashing the app.
  *
+ * Since the session foundation (Part 26-H) this object also owns the only JNI
+ * entry points that create/inspect/close native session slots. A slot is a
+ * placeholder identity for a future execution backend: creating one spawns
+ * nothing, and the returned results never claim a process or PTY is running.
+ *
  * The external declarations below map to the mangled symbols implemented in
  * app/src/main/cpp/aliasnull_runtime.cpp; keep names and signatures in sync with
  * that file. This object is a singleton, so its native methods are instance
@@ -25,6 +30,10 @@ internal object NativeRuntimeBridge {
 
     @Volatile
     private var libraryLoaded = false
+
+    /** True only while the native bootstrap has succeeded and not yet been released. */
+    @Volatile
+    private var bootstrapActive = false
 
     private val lock = Any()
 
@@ -78,6 +87,7 @@ internal object NativeRuntimeBridge {
             Log.e(TAG, "JNI handshake failed: native returned code $code")
             return NativeRuntimeResult.failure(nativeCode(code), nativeMessage(code))
         }
+        bootstrapActive = true
         return try {
             val version = nativeRuntimeVersion()
             val bootstrap = nativeBootstrapVersion()
@@ -106,11 +116,124 @@ internal object NativeRuntimeBridge {
 
     /** Releases the native bootstrap state. No-op unless the library is loaded. */
     fun shutdownNativeRuntime() {
+        bootstrapActive = false
         if (!libraryLoaded) return
         try {
             nativeShutdown()
         } catch (t: Throwable) {
             Log.e(TAG, "Native shutdown failed", t)
+        }
+    }
+
+    // ---- Native session-slot foundation ----
+
+    /**
+     * Reserves one native session slot and reports the outcome honestly. The
+     * caller can distinguish why no slot exists: the library is unavailable,
+     * bootstrap never succeeded, or the native layer failed to reserve one.
+     * A successful slot is [NativeSessionOutcome.SESSION_READY] with a stable
+     * opaque [NativeSessionResult.sessionId]; nothing is running.
+     */
+    fun createNativeSession(): NativeSessionResult {
+        if (!libraryLoaded) {
+            return NativeSessionResult(
+                NativeSessionOutcome.LIBRARY_UNAVAILABLE,
+                message = "Native library could not be loaded; no session slot can be reserved.",
+            )
+        }
+        if (!bootstrapActive) {
+            return NativeSessionResult(
+                NativeSessionOutcome.BOOTSTRAP_NOT_READY,
+                message = "Native bootstrap is not active; no session slot can be reserved.",
+            )
+        }
+        val id = try {
+            nativeCreateSession()
+        } catch (t: Throwable) {
+            Log.e(TAG, "nativeCreateSession threw", t)
+            return NativeSessionResult.unexpected(t)
+        }
+        if (id <= 0L) {
+            return NativeSessionResult(
+                NativeSessionOutcome.SESSION_PREP_FAILED,
+                message = "Native layer could not reserve a session slot.",
+            )
+        }
+        return NativeSessionResult(
+            outcome = NativeSessionOutcome.SESSION_READY,
+            sessionId = id,
+            state = NativeSessionState.READY,
+            message = "Native session slot ready (placeholder; nothing is running).",
+        )
+    }
+
+    /**
+     * Closes a session slot deterministically. A [sessionId] of [NO_SESSION]
+     * and an unknown/already-closed id are both benign: the slot is closed or
+     * was never open, reported as [NativeSessionOutcome.SESSION_CLOSED]. Safe to
+     * call repeatedly.
+     */
+    fun closeNativeSession(sessionId: Long): NativeSessionResult {
+        if (sessionId <= NativeSessionResult.NO_SESSION) {
+            return NativeSessionResult(
+                NativeSessionOutcome.SESSION_CLOSED,
+                sessionId = sessionId,
+                message = "No live session slot to close (idempotent no-op).",
+            )
+        }
+        if (!bootstrapActive) {
+            return NativeSessionResult(
+                NativeSessionOutcome.SESSION_LAYER_STOPPED,
+                sessionId = sessionId,
+                message = "Native bootstrap is not active; nothing was closed.",
+            )
+        }
+        val code = try {
+            nativeCloseSession(sessionId)
+        } catch (t: Throwable) {
+            Log.e(TAG, "nativeCloseSession threw", t)
+            return NativeSessionResult.unexpected(t)
+        }
+        return if (code == 0) {
+            NativeSessionResult(
+                outcome = NativeSessionOutcome.SESSION_CLOSED,
+                sessionId = sessionId,
+                state = NativeSessionState.CLOSED,
+                message = "Native session slot closed (or already closed).",
+            )
+        } else {
+            NativeSessionResult(
+                outcome = NativeSessionOutcome.SESSION_LAYER_STOPPED,
+                sessionId = sessionId,
+                message = "Native close could not run (code $code).",
+            )
+        }
+    }
+
+    /**
+     * Lifecycle state of a live session slot, or null when [sessionId] is not a
+     * live session (never created, or already closed). Also null when the native
+     * layer is not active. A non-null result never claims a process is running.
+     */
+    fun queryNativeSessionState(sessionId: Long): NativeSessionState? {
+        if (sessionId <= NativeSessionResult.NO_SESSION || !bootstrapActive) return null
+        val code = try {
+            nativeSessionState(sessionId)
+        } catch (t: Throwable) {
+            Log.w(TAG, "nativeSessionState threw", t)
+            return null
+        }
+        return nativeState(code)
+    }
+
+    /** Number of currently live session slots; 0 when the native layer is inactive. */
+    fun liveNativeSessionCount(): Int {
+        if (!libraryLoaded || !bootstrapActive) return 0
+        return try {
+            nativeActiveSessionCount()
+        } catch (t: Throwable) {
+            Log.w(TAG, "nativeActiveSessionCount threw", t)
+            0
         }
     }
 
@@ -126,7 +249,25 @@ internal object NativeRuntimeBridge {
 
     private external fun nativeCapabilities(): String
 
-    // ---- Error mapping (mirrors the result constants in aliasnull_runtime.cpp) ----
+    private external fun nativeCreateSession(): Long
+
+    private external fun nativeSessionState(sessionId: Long): Int
+
+    private external fun nativeActiveSessionCount(): Int
+
+    private external fun nativeCloseSession(sessionId: Long): Int
+
+    // ---- State/error mapping (mirrors the constants in aliasnull_runtime.cpp) ----
+
+    private fun nativeState(code: Int): NativeSessionState? = when (code) {
+        0 -> NativeSessionState.UNINITIALIZED
+        1 -> NativeSessionState.READY
+        2 -> NativeSessionState.STARTING
+        3 -> NativeSessionState.RUNNING
+        4 -> NativeSessionState.CLOSED
+        5 -> NativeSessionState.ERROR
+        else -> null
+    }
 
     private fun nativeCode(code: Int): NativeBootstrapCode = when (code) {
         -1 -> NativeBootstrapCode.RUNTIME_ROOT_INVALID

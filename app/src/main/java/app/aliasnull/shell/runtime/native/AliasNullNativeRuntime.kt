@@ -5,13 +5,19 @@ import android.util.Log
 import java.io.File
 
 /**
- * Application/runtime-scoped owner of the AliasNull native runtime bootstrap.
+ * Application/runtime-scoped owner of the AliasNull native runtime bootstrap and
+ * its session-slot foundation.
  *
  * This is deliberately NOT a Linux runtime, a shell, or a command backend. It
  * prepares the application-private storage that a future runtime will own and
  * drives the native bootstrap foundation behind [NativeRuntimeBridge]. Command
  * execution continues to live in the temporary frontend executor and is not
  * affected by this class.
+ *
+ * The session-slot methods ([createFoundationSession], [closeFoundationSession],
+ * [foundationSessionState], [liveFoundationSessionCount]) operate on opaque
+ * native placeholder identities for a future execution backend. A created slot
+ * is READY and nothing is forked, spawned or run; it is never a process or PTY.
  *
  * Storage layout (all under the application's noBackupFilesDir so runtime state
  * is disposable, machine-specific and never cloud-backed):
@@ -61,6 +67,27 @@ class AliasNullNativeRuntime(context: Context) {
     fun shutdown() {
         NativeRuntimeBridge.shutdownNativeRuntime()
     }
+
+    // ---- Session-slot foundation (placeholder identities only; nothing runs) ----
+
+    /** Reserves one native session slot; see [NativeRuntimeBridge.createNativeSession]. */
+    fun createFoundationSession(): NativeSessionResult =
+        NativeRuntimeBridge.createNativeSession()
+
+    /**
+     * Closes a native session slot deterministically (idempotent for unknown,
+     * already-closed or never-created ids); see [NativeRuntimeBridge.closeNativeSession].
+     */
+    fun closeFoundationSession(sessionId: Long): NativeSessionResult =
+        NativeRuntimeBridge.closeNativeSession(sessionId)
+
+    /** Lifecycle state of a live session slot, or null when not live/inactive. */
+    fun foundationSessionState(sessionId: Long): NativeSessionState? =
+        NativeRuntimeBridge.queryNativeSessionState(sessionId)
+
+    /** Number of currently live session slots (0 once all are closed). */
+    val liveFoundationSessionCount: Int
+        get() = NativeRuntimeBridge.liveNativeSessionCount()
 
     /** Creates any missing runtime directories and validates them; null when all are ready. */
     private fun prepareDirectories(root: File): NativeRuntimeResult? {

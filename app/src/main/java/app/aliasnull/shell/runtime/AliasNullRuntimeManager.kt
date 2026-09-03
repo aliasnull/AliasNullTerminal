@@ -6,6 +6,8 @@ import app.aliasnull.shell.execution.ShellCommandExecutor
 import app.aliasnull.shell.execution.TemporaryShellCommandExecutor
 import app.aliasnull.shell.runtime.native.AliasNullNativeRuntime
 import app.aliasnull.shell.runtime.native.NativeRuntimeResult
+import app.aliasnull.shell.runtime.native.NativeSessionOutcome
+import app.aliasnull.shell.runtime.native.NativeSessionResult
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -27,6 +29,12 @@ import kotlinx.coroutines.launch
  * native, and a bootstrap failure only moves it to [ShellRuntimeState.Error]
  * while the Shell keeps working through the frontend executor.
  *
+ * On a successful bootstrap the manager also reserves one native session slot
+ * (see [AliasNullNativeRuntime.createFoundationSession]) so the Kotlin <-> JNI
+ * session lifecycle is exercised honestly and observably. The slot is a
+ * placeholder identity - READY, never running - and is deterministically closed
+ * in [shutdown]. A session failure never downgrades the bootstrap state.
+ *
  * The manager holds the [Application] context, not an Activity context, so it
  * never leaks a UI Context. Initialization runs on a background dispatcher and
  * is never triggered from Application.onCreate; the Shell ViewModel calls
@@ -46,6 +54,17 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
     @Volatile
     var nativeBootstrapResult: NativeRuntimeResult? = null
         private set
+
+    /**
+     * Outcome of the most recent native session-slot operation; null until one
+     * completes. A session slot is a placeholder (READY) and never a process.
+     */
+    @Volatile
+    var nativeSessionResult: NativeSessionResult? = null
+        private set
+
+    @Volatile
+    private var activeNativeSessionId: Long = NativeSessionResult.NO_SESSION
 
     // Process/runtime-scoped: the manager outlives any single screen. A bare
     // scope is appropriate here because bootstrap is finite and quick; it is not
@@ -75,6 +94,7 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
                     if (result.success) ShellRuntimeState.NativeBootstrapReady else ShellRuntimeState.Error
                 if (result.success) {
                     Log.i(TAG, "Runtime state -> NativeBootstrapReady (version ${result.runtimeVersion})")
+                    reserveFoundationSession()
                 } else {
                     Log.e(TAG, "Runtime state -> Error: ${result.code} ${result.message}")
                 }
@@ -86,12 +106,48 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
         synchronized(this) {
             bootstrapJob?.cancel()
             bootstrapJob = null
+            releaseFoundationSession()
             runCatching { nativeRuntime.shutdown() }
                 .onFailure { Log.w(TAG, "Native shutdown reported a problem", it) }
             // With the native bootstrap released only the frontend executor remains.
             if (_state.value == ShellRuntimeState.NativeBootstrapReady) {
                 _state.value = ShellRuntimeState.FrontendOnly
             }
+        }
+    }
+
+    /**
+     * Reserves one native session slot to exercise the Kotlin <-> JNI session
+     * lifecycle after a successful bootstrap. Failure is logged but never
+     * downgrades the bootstrap state: a session slot is an independent
+     * foundation, not the execution runtime.
+     */
+    private fun reserveFoundationSession() {
+        val session = runCatching { nativeRuntime.createFoundationSession() }
+            .getOrElse { NativeSessionResult.unexpected(it) }
+        nativeSessionResult = session
+        if (session.outcome == NativeSessionOutcome.SESSION_READY) {
+            activeNativeSessionId = session.sessionId
+            Log.i(TAG, "Foundation session ready (id=${session.sessionId}, live=${nativeRuntime.liveFoundationSessionCount})")
+        } else {
+            Log.w(TAG, "Foundation session not reserved: ${session.outcome} ${session.message}")
+        }
+    }
+
+    /**
+     * Closes the reserved session slot deterministically. Closing an
+     * unknown/never-created/NO_SESSION id is a benign no-op, so this is safe to
+     * call repeatedly and before the native bootstrap is released.
+     */
+    private fun releaseFoundationSession() {
+        val closed = runCatching { nativeRuntime.closeFoundationSession(activeNativeSessionId) }
+            .getOrElse { NativeSessionResult.unexpected(it) }
+        nativeSessionResult = closed
+        activeNativeSessionId = NativeSessionResult.NO_SESSION
+        if (closed.outcome == NativeSessionOutcome.SESSION_CLOSED) {
+            Log.i(TAG, "Foundation session released (live=${nativeRuntime.liveFoundationSessionCount})")
+        } else {
+            Log.w(TAG, "Foundation session release reported ${closed.outcome}: ${closed.message}")
         }
     }
 
