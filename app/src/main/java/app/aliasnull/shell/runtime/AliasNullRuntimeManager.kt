@@ -11,6 +11,8 @@ import app.aliasnull.shell.runtime.native.AliasNullNativeRuntime
 import app.aliasnull.shell.runtime.native.NativeRuntimeResult
 import app.aliasnull.shell.runtime.native.NativeSessionOutcome
 import app.aliasnull.shell.runtime.native.NativeSessionResult
+import app.aliasnull.shell.terminal.TerminalSessionEngine
+import app.aliasnull.shell.terminal.TerminalSessionEngineFoundation
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -44,6 +46,12 @@ import kotlinx.coroutines.launch
  * is never triggered from Application.onCreate; the Shell ViewModel calls
  * [initialize] when the Shell runtime is first needed, after which the state
  * survives ordinary UI recomposition.
+ *
+ * Besides the [executor] command surface the manager owns a read-only terminal
+ * session engine boundary ([terminalSessionEngine]); like the frontend manager it
+ * hosts the contract-only foundation, so the boundary is always queryable and
+ * reports that no interactive session backend exists. The engine is a sibling of
+ * command execution, never a replacement for it, and is released in [shutdown].
  */
 class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
 
@@ -68,6 +76,13 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
 
     override val executor: ShellCommandExecutor
         get() = executionRouter
+
+    /**
+     * The terminal session engine boundary owned by this runtime. Hosts the same
+     * contract-only foundation as the frontend manager, so the boundary is always
+     * queryable and honestly reports contract-present / no session backend.
+     */
+    override val terminalSessionEngine: TerminalSessionEngine = TerminalSessionEngineFoundation
 
     private val _state = MutableStateFlow(ShellRuntimeState.FrontendOnly)
     override val state: StateFlow<ShellRuntimeState> = _state.asStateFlow()
@@ -102,6 +117,15 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
         Log.i(
             TAG,
             "Execution routing ready: requested=${route.requestedBackend ?: "AUTO"} selected=${route.backend} (${route.status}) - ${route.message}",
+        )
+        // One line at construction: the honest terminal engine boundary the Shell
+        // can always query. The contract-only foundation never hosts a session.
+        val engine = terminalSessionEngine.availability
+        Log.i(
+            TAG,
+            "Terminal session engine boundary: contractPresent=${engine.contractPresent} " +
+                "sessionBackendAvailable=${engine.sessionBackendAvailable} " +
+                "canHostTerminalSession=${engine.canHostTerminalSession}",
         )
     }
 
@@ -142,6 +166,10 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
             bootstrapJob?.cancel()
             bootstrapJob = null
             releaseFoundationSession()
+            // Release the owned terminal engine boundary. The contract-only
+            // foundation has no live sessions, so this is a deterministic no-op,
+            // safe when repeated and safe before any successful initialization.
+            terminalSessionEngine.shutdown()
             runCatching { nativeRuntime.shutdown() }
                 .onFailure { Log.w(TAG, "Native shutdown reported a problem", it) }
             // With the native bootstrap released only the frontend executor remains.

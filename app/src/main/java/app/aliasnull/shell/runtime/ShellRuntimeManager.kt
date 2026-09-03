@@ -5,6 +5,8 @@ import app.aliasnull.shell.execution.ExecutionBackendAvailability
 import app.aliasnull.shell.execution.ExecutionRouter
 import app.aliasnull.shell.execution.ShellCommandExecutor
 import app.aliasnull.shell.execution.TemporaryShellCommandExecutor
+import app.aliasnull.shell.terminal.TerminalSessionEngine
+import app.aliasnull.shell.terminal.TerminalSessionEngineFoundation
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -15,12 +17,19 @@ import kotlinx.coroutines.flow.asStateFlow
  * The manager is the Shell-facing abstraction over everything below it:
  *
  *   ShellRuntimeManager
- *       ├── state            (honest [ShellRuntimeState] lifecycle)
- *       ├── executor         (resolved through the execution routing layer;
- *       │                     currently routes every command to the temporary
- *       │                     frontend executor)
- *       └── native bootstrap (loaded and initialized behind the scenes when the
- *                             concrete manager has a native layer)
+ *       ├── state                 (honest [ShellRuntimeState] lifecycle)
+ *       ├── executor              (resolved through the execution routing layer;
+ *       │                          currently routes every command to the temporary
+ *       │                          frontend executor)
+ *       ├── terminalSessionEngine (the read-only terminal session engine boundary;
+ *       │                          hosted by the contract-only foundation)
+ *       └── native bootstrap      (loaded and initialized behind the scenes when
+ *                                  the concrete manager has a native layer)
+ *
+ * Command execution ([executor]) and the terminal session engine
+ * ([terminalSessionEngine]) are separate, never merged concerns: the engine is
+ * not a [ShellCommandExecutor] and never receives a command from the routing
+ * layer.
  *
  * [initialize] brings up whichever runtime foundation the concrete manager has
  * (the frontend-only manager has none and stays on [ShellRuntimeState.FrontendOnly]).
@@ -35,6 +44,16 @@ interface ShellRuntimeManager {
 
     /** The executor commands are routed to right now (the routing layer's AUTO selection). */
     val executor: ShellCommandExecutor
+
+    /**
+     * The read-only terminal-session engine boundary owned by this runtime. This
+     * is a separate concern from [executor]: [executor] routes batch commands
+     * through the execution routing layer, while this engine exposes the terminal
+     * session contract. Every manager hosts the engine (currently the contract-only
+     * foundation), so the boundary is always queryable and the app can always ask,
+     * in honest terms, whether an interactive terminal session backend exists.
+     */
+    val terminalSessionEngine: TerminalSessionEngine
 
     /**
      * Begins asynchronous bootstrap of the runtime foundation. Safe to call
@@ -83,12 +102,21 @@ class FrontendShellRuntimeManager : ShellRuntimeManager {
     override val executor: ShellCommandExecutor
         get() = executionRouter
 
+    /**
+     * The terminal session engine boundary. The frontend manager hosts the same
+     * contract-only foundation as the native manager, so the boundary is always
+     * queryable and honestly reports contract-present / no session backend.
+     */
+    override val terminalSessionEngine: TerminalSessionEngine = TerminalSessionEngineFoundation
+
     override fun initialize() {
         // Frontend-only: there is nothing to bootstrap.
     }
 
     override fun shutdown() {
-        // Frontend-only: there is nothing to release.
+        // Frontend-only: release the owned terminal engine boundary. The contract-only
+        // foundation has no live sessions, so this is a deterministic no-op.
+        terminalSessionEngine.shutdown()
     }
 
     override fun backendAvailability(backend: ExecutionBackend): ExecutionBackendAvailability = when (backend) {
