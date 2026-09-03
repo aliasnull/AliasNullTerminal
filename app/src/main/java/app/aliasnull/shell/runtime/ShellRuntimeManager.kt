@@ -2,6 +2,7 @@ package app.aliasnull.shell.runtime
 
 import app.aliasnull.shell.execution.ExecutionBackend
 import app.aliasnull.shell.execution.ExecutionBackendAvailability
+import app.aliasnull.shell.execution.ExecutionRouter
 import app.aliasnull.shell.execution.ShellCommandExecutor
 import app.aliasnull.shell.execution.TemporaryShellCommandExecutor
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -15,22 +16,24 @@ import kotlinx.coroutines.flow.asStateFlow
  *
  *   ShellRuntimeManager
  *       ├── state            (honest [ShellRuntimeState] lifecycle)
- *       ├── executor         (currently the temporary frontend executor)
+ *       ├── executor         (resolved through the execution routing layer;
+ *       │                     currently routes every command to the temporary
+ *       │                     frontend executor)
  *       └── native bootstrap (loaded and initialized behind the scenes when the
  *                             concrete manager has a native layer)
  *
  * [initialize] brings up whichever runtime foundation the concrete manager has
  * (the frontend-only manager has none and stays on [ShellRuntimeState.FrontendOnly]).
  * Initializing the native bootstrap must never be conflated with command
- * execution becoming native: the executor is swapped only in a future phase when
- * a real AliasNull execution backend exists.
+ * execution becoming native: routing moves to a native backend only in a future
+ * phase when a real AliasNull execution backend exists and can genuinely run.
  */
 interface ShellRuntimeManager {
 
     /** Current availability of the AliasNull runtime. */
     val state: StateFlow<ShellRuntimeState>
 
-    /** The executor that should run commands right now. */
+    /** The executor commands are routed to right now (the routing layer's AUTO selection). */
     val executor: ShellCommandExecutor
 
     /**
@@ -63,7 +66,22 @@ class FrontendShellRuntimeManager : ShellRuntimeManager {
     override val state: StateFlow<ShellRuntimeState> =
         MutableStateFlow(ShellRuntimeState.FrontendOnly).asStateFlow()
 
-    override val executor: ShellCommandExecutor = TemporaryShellCommandExecutor()
+    /** The genuinely executable temporary backend - the only real executor today. */
+    private val temporaryExecutor: ShellCommandExecutor = TemporaryShellCommandExecutor()
+
+    /**
+     * Execution routing layer; AUTO always resolves to the temporary executor
+     * because this manager has no native layer at all.
+     */
+    private val executionRouter: ExecutionRouter by lazy {
+        ExecutionRouter(
+            executableBackends = mapOf(ExecutionBackend.TEMPORARY to temporaryExecutor),
+            availabilityOf = ::backendAvailability,
+        )
+    }
+
+    override val executor: ShellCommandExecutor
+        get() = executionRouter
 
     override fun initialize() {
         // Frontend-only: there is nothing to bootstrap.

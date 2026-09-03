@@ -4,6 +4,7 @@ import android.app.Application
 import android.util.Log
 import app.aliasnull.shell.execution.ExecutionBackend
 import app.aliasnull.shell.execution.ExecutionBackendAvailability
+import app.aliasnull.shell.execution.ExecutionRouter
 import app.aliasnull.shell.execution.ShellCommandExecutor
 import app.aliasnull.shell.execution.TemporaryShellCommandExecutor
 import app.aliasnull.shell.runtime.native.AliasNullNativeRuntime
@@ -25,9 +26,10 @@ import kotlinx.coroutines.launch
  * The app's [ShellRuntimeManager]: owns the honest runtime lifecycle and drives
  * the native bootstrap foundation behind [AliasNullNativeRuntime].
  *
- * Command execution is deliberately unchanged: [executor] remains the temporary
- * frontend executor. Native bootstrap success only moves [state] to
- * [ShellRuntimeState.NativeBootstrapReady] - it does not make the executor
+ * Command execution behavior is deliberately unchanged: [executor] resolves
+ * through the execution routing layer, whose AUTO route sends every command to
+ * the temporary frontend executor. Native bootstrap success only moves [state]
+ * to [ShellRuntimeState.NativeBootstrapReady] - it does not make the executor
  * native, and a bootstrap failure only moves it to [ShellRuntimeState.Error]
  * while the Shell keeps working through the frontend executor.
  *
@@ -47,10 +49,28 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
 
     private val nativeRuntime: AliasNullNativeRuntime = AliasNullNativeRuntime(application)
 
+    /** The genuinely executable temporary backend - the only real executor today. */
+    private val temporaryExecutor: ShellCommandExecutor = TemporaryShellCommandExecutor()
+
+    /**
+     * The execution routing layer: the single decision point that resolves each
+     * execution request to a genuinely executable backend. Today AUTO resolves to
+     * [temporaryExecutor]; the native backend is never executable and never
+     * receives a command. Exposed through [ShellRuntimeManager.executor] so the
+     * Shell and ViewModel never see backend selection or JNI.
+     */
+    private val executionRouter: ExecutionRouter by lazy {
+        ExecutionRouter(
+            executableBackends = mapOf(ExecutionBackend.TEMPORARY to temporaryExecutor),
+            availabilityOf = ::backendAvailability,
+        )
+    }
+
+    override val executor: ShellCommandExecutor
+        get() = executionRouter
+
     private val _state = MutableStateFlow(ShellRuntimeState.FrontendOnly)
     override val state: StateFlow<ShellRuntimeState> = _state.asStateFlow()
-
-    override val executor: ShellCommandExecutor = TemporaryShellCommandExecutor()
 
     /** Outcome of the most recent bootstrap attempt; null until one completes. */
     @Volatile
@@ -75,9 +95,14 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
     private var bootstrapJob: Job? = null
 
     init {
-        // One-line, process-scoped: which backend actually runs commands today.
-        val temporary = ExecutionBackendAvailability.temporary()
-        Log.i(TAG, "Execution backend selected: ${temporary.backend} (${temporary.status}) - ${temporary.message}")
+        // One line at construction: the routing decision the Shell will use.
+        // AUTO resolves to the temporary backend while native execution is not
+        // implemented; the route's selected backend is always the actual one.
+        val route = executionRouter.resolveAuto()
+        Log.i(
+            TAG,
+            "Execution routing ready: requested=${route.requestedBackend ?: "AUTO"} selected=${route.backend} (${route.status}) - ${route.message}",
+        )
     }
 
     override fun initialize() {
