@@ -2,6 +2,8 @@ package app.aliasnull.shell.runtime
 
 import android.app.Application
 import android.util.Log
+import app.aliasnull.shell.execution.ExecutionBackend
+import app.aliasnull.shell.execution.ExecutionBackendAvailability
 import app.aliasnull.shell.execution.ShellCommandExecutor
 import app.aliasnull.shell.execution.TemporaryShellCommandExecutor
 import app.aliasnull.shell.runtime.native.AliasNullNativeRuntime
@@ -72,6 +74,12 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var bootstrapJob: Job? = null
 
+    init {
+        // One-line, process-scoped: which backend actually runs commands today.
+        val temporary = ExecutionBackendAvailability.temporary()
+        Log.i(TAG, "Execution backend selected: ${temporary.backend} (${temporary.status}) - ${temporary.message}")
+    }
+
     override fun initialize() {
         synchronized(this) {
             val current = _state.value
@@ -95,8 +103,10 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
                 if (result.success) {
                     Log.i(TAG, "Runtime state -> NativeBootstrapReady (version ${result.runtimeVersion})")
                     reserveFoundationSession()
+                    logNativeExecutionSeam()
                 } else {
                     Log.e(TAG, "Runtime state -> Error: ${result.code} ${result.message}")
+                    logNativeExecutionSeam()
                 }
             }
         }
@@ -149,6 +159,27 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
         } else {
             Log.w(TAG, "Foundation session release reported ${closed.outcome}: ${closed.message}")
         }
+    }
+
+    /**
+     * Logs the honest state of the future native execution backend exactly once
+     * per bootstrap outcome. Even after a successful bootstrap this reports that
+     * native execution is NOT implemented, never a fabricated running backend.
+     */
+    private fun logNativeExecutionSeam() {
+        val availability = NativeExecutionSeam.availability(
+            nativeLibraryAvailable = nativeRuntime.isNativeLibraryLoaded,
+            nativeBootstrapActive = nativeRuntime.isNativeBootstrapActive,
+        )
+        Log.i(TAG, "Native execution backend: ${availability.status} - ${availability.message}")
+    }
+
+    override fun backendAvailability(backend: ExecutionBackend): ExecutionBackendAvailability = when (backend) {
+        ExecutionBackend.TEMPORARY -> ExecutionBackendAvailability.temporary()
+        ExecutionBackend.NATIVE_RUNTIME -> NativeExecutionSeam.availability(
+            nativeLibraryAvailable = nativeRuntime.isNativeLibraryLoaded,
+            nativeBootstrapActive = nativeRuntime.isNativeBootstrapActive,
+        )
     }
 
     private companion object {

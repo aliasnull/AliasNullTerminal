@@ -39,6 +39,9 @@ internal object NativeRuntimeBridge {
 
     val isLibraryLoaded: Boolean get() = libraryLoaded
 
+    /** True only while the native bootstrap has succeeded and not yet been released. */
+    val isBootstrapActive: Boolean get() = bootstrapActive
+
     /**
      * Loads libaliasnull_runtime.so exactly once. Safe to call repeatedly and
      * from any thread; returns false (never throws) when the library cannot be

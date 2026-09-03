@@ -68,6 +68,14 @@ class AliasNullNativeRuntime(context: Context) {
         NativeRuntimeBridge.shutdownNativeRuntime()
     }
 
+    /** True once libaliasnull_runtime.so has been loaded (a load is never undone). */
+    val isNativeLibraryLoaded: Boolean
+        get() = NativeRuntimeBridge.isLibraryLoaded
+
+    /** True only while the native bootstrap has succeeded and not yet been released. */
+    val isNativeBootstrapActive: Boolean
+        get() = NativeRuntimeBridge.isBootstrapActive
+
     // ---- Session-slot foundation (placeholder identities only; nothing runs) ----
 
     /** Reserves one native session slot; see [NativeRuntimeBridge.createNativeSession]. */

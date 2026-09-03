@@ -1,5 +1,7 @@
 package app.aliasnull.shell.runtime
 
+import app.aliasnull.shell.execution.ExecutionBackend
+import app.aliasnull.shell.execution.ExecutionBackendAvailability
 import app.aliasnull.shell.execution.ShellCommandExecutor
 import app.aliasnull.shell.execution.TemporaryShellCommandExecutor
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -39,6 +41,16 @@ interface ShellRuntimeManager {
 
     /** Releases the runtime foundation. No-op for a frontend-only manager. */
     fun shutdown()
+
+    /**
+     * Describes whether a specific [ExecutionBackend] can execute commands right
+     * now, in honest [ExecutionBackendStatus] terms. The temporary backend is
+     * always [ExecutionBackendStatus.ACTIVE]; the native backend reports exactly
+     * why it cannot run (library unavailable / not bootstrapped / not
+     * implemented). This is the runtime boundary's own answer - no JNI leaks to
+     * callers.
+     */
+    fun backendAvailability(backend: ExecutionBackend): ExecutionBackendAvailability
 }
 
 /**
@@ -59,5 +71,13 @@ class FrontendShellRuntimeManager : ShellRuntimeManager {
 
     override fun shutdown() {
         // Frontend-only: there is nothing to release.
+    }
+
+    override fun backendAvailability(backend: ExecutionBackend): ExecutionBackendAvailability = when (backend) {
+        ExecutionBackend.TEMPORARY -> ExecutionBackendAvailability.temporary()
+        ExecutionBackend.NATIVE_RUNTIME -> NativeExecutionSeam.availability(
+            nativeLibraryAvailable = false,
+            nativeBootstrapActive = false,
+        )
     }
 }
