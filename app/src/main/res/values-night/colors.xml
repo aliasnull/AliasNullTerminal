@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark-mode splash background matches the dark Compose surface so the
+         Android 12+ splash hands off seamlessly in night mode. -->
+    <color name="splash_background">#191C1C</color>
+</resources>

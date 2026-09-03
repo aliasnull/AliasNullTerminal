@@ -1,0 +1,32 @@
+# Gradle generated files
+.gradle/
+**/.gradle/
+build/
+**/build/
+
+# Native CMake generated files
+.cxx/
+**/.cxx/
+
+# Kotlin generated files
+.kotlin/
+**/.kotlin/
+
+# ACS IDE local files
+.acside/
+
+# Local machine configuration
+local.properties
+
+# IDE files
+.idea/
+*.iml
+
+# APK files
+*.apk
+
+# OS files
+.DS_Store
+Thumbs.dbAliasNull.zip
+/AliasNull.zip
+/.claude/

@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AliasNull</string>
+    <string name="home_mark">&gt;</string>
+    <string name="home_tagline">Mobile terminal · Native runtime · Linux environment</string>
+    <string name="home_stage_note">Application foundation. In this build the areas below are navigation and UI structure only — the AN Shell, ALIA packages, filesystem and native runtime are not implemented yet.</string>
+    <string name="home_areas_label">Areas</string>
+
+    <string name="nav_home">Home</string>
+    <string name="nav_shell">Shell</string>
+    <string name="nav_packages">Packages</string>
+    <string name="nav_files">Files</string>
+    <string name="nav_settings">Settings</string>
+
+    <string name="area_summary_shell">Interactive terminal UI</string>
+    <string name="area_summary_packages">ALIA package manager (.anpkg)</string>
+    <string name="area_summary_files">AliasNull file environment</string>
+    <string name="area_summary_settings">Future configuration</string>
+
+    <string name="section_not_implemented">Not implemented yet — UI foundation only.</string>
+    <string name="section_planned_scope">Planned scope</string>
+
+    <string name="packages_identity">ALIA · .anpkg</string>
+    <string name="packages_description">Home of the ALIA package manager for AliasNull packages (.anpkg). No repositories, downloads or installs are implemented yet.</string>
+    <string name="packages_planned_repositories">Repository access and discovery</string>
+    <string name="packages_planned_install">Download and install of .anpkg packages</string>
+    <string name="packages_planned_dependencies">Dependency resolution</string>
+    <string name="packages_planned_database">Local package database</string>
+
+    <string name="files_identity">AliasNull filesystem</string>
+    <string name="files_description">Future file environment of AliasNull. No virtual filesystem is mounted, and this app does not read or scan your device.</string>
+    <string name="files_planned_layout">Virtual filesystem layout and mounting</string>
+    <string name="files_planned_browser">File-manager browsing UI</string>
+    <string name="files_planned_backends">Storage and platform backends</string>
+
+    <string name="settings_identity">Configuration</string>
+    <string name="settings_description">Central place for future AliasNull settings. No functional options exist yet; this is an empty structure ready for later phases.</string>
+    <string name="settings_planned_appearance">Appearance</string>
+    <string name="settings_planned_shell">Shell</string>
+    <string name="settings_planned_runtime">Runtime</string>
+    <string name="settings_planned_packages">Packages</string>
+    <string name="settings_planned_desktop">Desktop / GUI</string>
+
+    <string name="shell_new_session">New session</string>
+    <string name="shell_close_session">Close session</string>
+    <string name="shell_key_up">Previous command</string>
+    <string name="shell_key_down">Next command</string>
+    <string name="shell_key_left">Move cursor left</string>
+    <string name="shell_key_right">Move cursor right</string>
+    <string name="shell_open_sessions">Open sessions</string>
+    <string name="shell_show_keyboard">Show keyboard</string>
+</resources>

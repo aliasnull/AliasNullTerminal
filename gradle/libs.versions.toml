@@ -1,0 +1,48 @@
+[versions]
+# Build tooling. AGP 9.1.1 is the version whose official minimum/default Gradle is
+# exactly 9.3.1 (see the AGP release notes compatibility table) and which still
+# fully supports compileSdk 36. AGP 9.x enables "built-in Kotlin" by default, so the
+# org.jetbrains.kotlin.android plugin is intentionally no longer used.
+agp = "9.1.1"
+# Used only for the Compose compiler Gradle plugin. AGP 9.1.1 embeds KGP 2.2.10; the
+# org.jetbrains.kotlin.plugin.compose artifact declares a compile dependency on the
+# full KGP 2.2.21, so Gradle resolves Kotlin to 2.2.21 (highest) and the Compose
+# compiler plugin version matches it. 2.2.21 is the Kotlin already proven by the
+# Part 26-A build.
+kotlin = "2.2.21"
+
+# AndroidX / Jetpack Compose. Versions are pinned to the Android 16 (API 36)
+# era so that none of them demands a compileSdk higher than 36.
+coreKtx = "1.17.0"
+lifecycleRuntimeKtx = "2.9.4"
+lifecycleViewModelCompose = "2.9.4"
+activityCompose = "1.11.0"
+composeBom = "2026.04.01"
+# Navigation Compose: newest stable whose AAR metadata minCompileSdk is 35
+# (compatible with the locked compileSdk 36). Navigation 2.10.0 and its
+# transitive Lifecycle 2.11.0 both require compileSdk 37, so they cannot be
+# used here; 2.9.8 caps its Lifecycle transitives at 2.9.x.
+navigation = "2.9.8"
+
+[libraries]
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycleRuntimeKtx" }
+androidx-lifecycle-viewmodel-compose = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "lifecycleViewModelCompose" }
+androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
+androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
+androidx-ui = { group = "androidx.compose.ui", name = "ui" }
+androidx-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
+androidx-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
+androidx-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
+androidx-material3 = { group = "androidx.compose.material3", name = "material3" }
+# material-icons-extended supplies the navigation/section icons. Version is
+# supplied by the Compose BOM (frozen at 1.7.8). Explicit dependency is
+# required: material3 no longer pulls an icon artifact transitively.
+androidx-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended" }
+androidx-navigation-compose = { group = "androidx.navigation", name = "navigation-compose", version.ref = "navigation" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+# Kotlin sources are compiled by AGP's built-in Kotlin; this plugin is applied only
+# to run the Compose compiler, which is released in lockstep with Kotlin.
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }

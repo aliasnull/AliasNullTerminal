@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Android 12+ (API 31) system splash styling for the launch theme.
+         windowSplashScreenBackground is matched to the Compose surface color
+         (per night mode) so the splash hands off seamlessly to the app UI. -->
+    <style name="Theme.AliasNull.Starting" parent="Theme.AliasNull">
+        <item name="android:windowSplashScreenBackground">@color/splash_background</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@mipmap/ic_launcher</item>
+    </style>
+</resources>

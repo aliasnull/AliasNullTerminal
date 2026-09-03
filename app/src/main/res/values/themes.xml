@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Normal application theme applied to the window once AliasNull draws.
+         Styling is owned by the Compose theme; this is only the window shell. -->
+    <style name="Theme.AliasNull" parent="android:Theme.Material.Light.NoActionBar" />
+
+    <!-- Launch ("starting") theme shown only while the process starts: on
+         Android 12+ it carries the windowSplashScreen* attributes (values-v31);
+         below Android 12 it simply inherits the normal theme. MainActivity
+         re-applies Theme.AliasNull before composing content, so this theme is
+         never left visible after startup. -->
+    <style name="Theme.AliasNull.Starting" parent="Theme.AliasNull" />
+</resources>
