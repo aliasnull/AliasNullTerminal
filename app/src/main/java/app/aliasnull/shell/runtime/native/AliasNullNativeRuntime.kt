@@ -12,7 +12,10 @@ import java.io.File
  * prepares the application-private storage that a future runtime will own and
  * drives the native bootstrap foundation behind [NativeRuntimeBridge]. Command
  * execution is a separate concern owned by the AN Shell core backend and is not
- * affected by this class.
+ * affected by this class. Since Part 27-O it also exposes a real one-shot
+ * process-runner capability ([runProcess]) behind the same bridge; like the
+ * bootstrap it is independent of AN Shell command routing and is wired to no
+ * command.
  *
  * The session-slot methods ([createFoundationSession], [closeFoundationSession],
  * [foundationSessionState], [liveFoundationSessionCount]) operate on opaque
@@ -96,6 +99,22 @@ class AliasNullNativeRuntime(context: Context) {
     /** Number of currently live session slots (0 once all are closed). */
     val liveFoundationSessionCount: Int
         get() = NativeRuntimeBridge.liveNativeSessionCount()
+
+    // ---- Real one-shot process runner (Part 27-O; an internal capability) ----
+
+    /**
+     * Runs one real child process ([NativeProcessRequest]) to completion and
+     * returns its genuine result ([NativeProcessResult]). This is blocking: it
+     * returns only after the child terminates, so it MUST be called from a
+     * background thread and never from the Android main/UI thread; a future
+     * consumer dispatches it on the existing coroutine infrastructure. It is an
+     * internal capability, not a command backend: it is not connected to the
+     * execution router, the Shell, or the AN Shell core, and no user command
+     * reaches it yet. stdout/stderr are kept separate and the exit status is the
+     * child's real one.
+     */
+    fun runProcess(request: NativeProcessRequest): NativeProcessResult =
+        NativeRuntimeBridge.runProcess(request)
 
     /** Creates any missing runtime directories and validates them; null when all are ready. */
     private fun prepareDirectories(root: File): NativeRuntimeResult? {

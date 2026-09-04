@@ -1,8 +1,8 @@
 // AliasNull native runtime bootstrap.
 //
 // THIS IS NOT A SHELL AND NOT A LINUX RUNTIME. This translation unit implements
-// the bootstrap foundation of the future AliasNull native runtime plus a small,
-// honest process/PTY *foundation*:
+// the bootstrap foundation of the AliasNull native runtime plus the metadata
+// around it:
 //
 //   * initializeNativeRuntime  - validate the runtime root supplied by the app,
 //                                verify the runtime-owned subdirectories exist
@@ -16,13 +16,18 @@
 //                                session never reports RUNNING in this phase.
 //   * runtime/version/capabilities - expose only metadata that is genuinely real.
 //
-// No command is parsed or executed here, and no process, fork, PTY, shell,
-// stdin/stdout/stderr or Linux userspace is created or simulated. Those are
-// future phases and a session slot must never be mistaken for any of them.
+// No command is parsed or interpreted here. Since Part 27-O the same library
+// also contains process_execution.cpp, a real one-shot process runner that can
+// fork + execve a caller-supplied argv with genuine stdin/stdout/stderr capture
+// and a real exit status -- but that capability never parses a shell string and
+// creates no PTY and no Linux userspace. A session slot must never be mistaken
+// for a process, and a session slot is never bound to a process in this phase.
 //
 // JNI symbols use the standard mangled form of the Kotlin object
 // NativeRuntimeBridge in package app.aliasnull.shell.runtime.native. These are
 // INSTANCE methods on the singleton object, so the second parameter is jobject.
+// The process-runner entry point lives in process_execution_jni.cpp on the same
+// Kotlin owner.
 
 #include <jni.h>
 #include <android/log.h>
@@ -61,7 +66,7 @@ constexpr size_t kRequiredSubdirCount = 3;
 constexpr const char* kRuntimeVersion = "0.1.0";   // AliasNull native runtime version
 constexpr const char* kBootstrapVersion = "2";     // bootstrap foundation version (2 adds the session foundation)
 constexpr const char* kCapabilities =
-    "nativeBootstrap,runtimeDirectoryValidation,nativeSessionFoundation";  // only what is genuinely implemented
+    "nativeBootstrap,runtimeDirectoryValidation,nativeSessionFoundation,nativeProcessExecution";  // only what is genuinely implemented
 
 // Session-layer result/state codes returned across JNI. State values form the
 // declared lifecycle vocabulary of a foundation session slot. Only READY and

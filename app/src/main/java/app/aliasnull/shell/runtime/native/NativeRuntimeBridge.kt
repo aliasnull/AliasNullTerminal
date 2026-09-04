@@ -18,10 +18,18 @@ import android.util.Log
  * placeholder identity for a future execution backend: creating one spawns
  * nothing, and the returned results never claim a process or PTY is running.
  *
+ * Since Part 27-O this object also owns the only JNI entry point that runs a
+ * real child process ([nativeRunProcess]): a one-shot argv request with genuine
+ * stdin/stdout/stderr capture and a real exit status, never a mock. It is not a
+ * command backend and is not connected to Shell command routing; it is an
+ * internal capability for future consumers and must be called from a background
+ * thread (it blocks until the child terminates).
+ *
  * The external declarations below map to the mangled symbols implemented in
- * app/src/main/cpp/aliasnull_runtime.cpp; keep names and signatures in sync with
- * that file. This object is a singleton, so its native methods are instance
- * methods (the C++ second parameter is jobject).
+ * app/src/main/cpp/aliasnull_runtime.cpp (bootstrap/session) and
+ * app/src/main/cpp/process_execution_jni.cpp (the process runner); keep names
+ * and signatures in sync with those files. This object is a singleton, so its
+ * native methods are instance methods (the C++ second parameter is jobject).
  */
 internal object NativeRuntimeBridge {
 
@@ -240,6 +248,54 @@ internal object NativeRuntimeBridge {
         }
     }
 
+    // ---- Real one-shot process runner (Part 27-O; not connected to command routing) ----
+
+    /**
+     * Runs one real child process to completion and returns its genuine result.
+     *
+     * The request is validated here (empty argv, empty executable, malformed
+     * environment key) before the native boundary is touched, so an invalid
+     * request returns a structured [NativeProcessOutcome.INTERNAL_ERROR] without
+     * a JNI round trip. When the library is not loaded the result is
+     * [NativeProcessOutcome.RUNNER_UNAVAILABLE]. The native layer validates the
+     * same constraints again, so a defensive failure never reaches the native
+     * runner as a malformed array.
+     *
+     * This is a blocking call that returns only after the child terminates; it
+     * MUST run on a background thread, never the Android main/UI thread. It does
+     * not require the native bootstrap (runtime-directory foundation) to be
+     * active: spawning a process is independent of the bootstrap root.
+     */
+    fun runProcess(request: NativeProcessRequest): NativeProcessResult {
+        request.validationError()?.let { message ->
+            return NativeProcessResult.internalError(message)
+        }
+        if (!libraryLoaded) {
+            return NativeProcessResult.runnerUnavailable(
+                "libaliasnull_runtime.so could not be loaded; no process can be run.",
+            )
+        }
+        val argv = request.argv.toTypedArray()
+        val envOverrides = request.environment
+            .takeIf { it.isNotEmpty() }
+            ?.map { (key, value) -> "$key=$value" }
+            ?.toTypedArray()
+        val payload = try {
+            nativeRunProcess(argv, envOverrides, request.workingDirectory, request.stdinBytes)
+        } catch (t: Throwable) {
+            Log.e(TAG, "nativeRunProcess threw", t)
+            return NativeProcessResult.internalError(
+                "Native process runner error: ${t.message ?: t::class.simpleName ?: "unknown"}",
+            )
+        }
+        if (payload == null) {
+            return NativeProcessResult.internalError(
+                "The native process runner could not build a result payload.",
+            )
+        }
+        return NativeProcessPayloadCodec.decode(payload)
+    }
+
     // ---- JNI entry points (implemented in aliasnull_runtime.cpp) ----
 
     private external fun nativeInitializeRuntime(runtimeRootPath: String): Int
@@ -259,6 +315,14 @@ internal object NativeRuntimeBridge {
     private external fun nativeActiveSessionCount(): Int
 
     private external fun nativeCloseSession(sessionId: Long): Int
+
+    // (implemented in process_execution_jni.cpp on the same Kotlin owner)
+    private external fun nativeRunProcess(
+        argv: Array<String>,
+        envOverrides: Array<String>?,
+        workingDirectory: String?,
+        stdinBytes: ByteArray?,
+    ): ByteArray?
 
     // ---- State/error mapping (mirrors the constants in aliasnull_runtime.cpp) ----
 
