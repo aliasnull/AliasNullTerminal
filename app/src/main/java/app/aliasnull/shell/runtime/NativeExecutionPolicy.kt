@@ -133,19 +133,17 @@ object NativeExecutionPolicy {
 
     private fun display(argv: List<String>): String = argv.joinToString(" ")
 
-    private companion object {
-        val PERMITTED_ARGV: List<List<String>> = listOf(
-            // Genuine successful launch + stdout capture (exit 0).
-            listOf("/system/bin/echo", SELFCHECK_STDOUT_TOKEN),
-            // Genuine stderr capture and a real non-zero exit (toybox cat reports a
-            // missing file on stderr and exits 1; stdout must stay empty).
-            listOf("/system/bin/cat", SELFCHECK_STDERR_PATH),
-            // Real non-zero exit with no output.
-            listOf("/system/bin/false"),
-            // Explicit internal negative case, allowlisted so the native
-            // LAUNCH_FAILED path is reachable through the same seam. The path is
-            // fixed and never exists.
-            listOf(SELFCHECK_MISSING_BINARY),
-        )
-    }
+    private val PERMITTED_ARGV: List<List<String>> = listOf(
+        // Genuine successful launch + stdout capture (exit 0).
+        listOf("/system/bin/echo", SELFCHECK_STDOUT_TOKEN),
+        // Genuine stderr capture and a real non-zero exit (toybox cat reports a
+        // missing file on stderr and exits 1; stdout must stay empty).
+        listOf("/system/bin/cat", SELFCHECK_STDERR_PATH),
+        // Real non-zero exit with no output.
+        listOf("/system/bin/false"),
+        // Explicit internal negative case, allowlisted so the native
+        // LAUNCH_FAILED path is reachable through the same seam. The path is
+        // fixed and never exists.
+        listOf(SELFCHECK_MISSING_BINARY),
+    )
 }

@@ -210,29 +210,27 @@ internal object NativeProcessSelfCheck {
         val code: NativeExecutionRejectionCode,
     )
 
-    private companion object {
-        val REPEATED_ARGV: List<List<String>> = listOf(
-            listOf("/system/bin/echo", NativeExecutionPolicy.SELFCHECK_STDOUT_TOKEN),
-            listOf("/system/bin/cat", NativeExecutionPolicy.SELFCHECK_STDERR_PATH),
-            listOf(NativeExecutionPolicy.SELFCHECK_MISSING_BINARY),
-        )
+    private val REPEATED_ARGV: List<List<String>> = listOf(
+        listOf("/system/bin/echo", NativeExecutionPolicy.SELFCHECK_STDOUT_TOKEN),
+        listOf("/system/bin/cat", NativeExecutionPolicy.SELFCHECK_STDERR_PATH),
+        listOf(NativeExecutionPolicy.SELFCHECK_MISSING_BINARY),
+    )
 
-        val REJECTION_PROBES: List<RejectionProbe> = listOf(
-            RejectionProbe(
-                label = "E. policy rejects an arbitrary shell invocation (no child launched)",
-                argv = listOf("/system/bin/sh", "-c", "echo must-not-run"),
-                code = NativeExecutionRejectionCode.EXECUTABLE_NOT_PERMITTED,
-            ),
-            RejectionProbe(
-                label = "E. policy rejects a permitted executable with non-allowlisted arguments",
-                argv = listOf("/system/bin/echo", "not-the-allowlisted-token"),
-                code = NativeExecutionRejectionCode.ARGUMENTS_NOT_PERMITTED,
-            ),
-            RejectionProbe(
-                label = "E. policy rejects a malformed request (empty executable)",
-                argv = listOf(""),
-                code = NativeExecutionRejectionCode.INVALID_REQUEST,
-            ),
-        )
-    }
+    private val REJECTION_PROBES: List<RejectionProbe> = listOf(
+        RejectionProbe(
+            label = "E. policy rejects an arbitrary shell invocation (no child launched)",
+            argv = listOf("/system/bin/sh", "-c", "echo must-not-run"),
+            code = NativeExecutionRejectionCode.EXECUTABLE_NOT_PERMITTED,
+        ),
+        RejectionProbe(
+            label = "E. policy rejects a permitted executable with non-allowlisted arguments",
+            argv = listOf("/system/bin/echo", "not-the-allowlisted-token"),
+            code = NativeExecutionRejectionCode.ARGUMENTS_NOT_PERMITTED,
+        ),
+        RejectionProbe(
+            label = "E. policy rejects a malformed request (empty executable)",
+            argv = listOf(""),
+            code = NativeExecutionRejectionCode.INVALID_REQUEST,
+        ),
+    )
 }
