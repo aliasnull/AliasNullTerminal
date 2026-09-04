@@ -92,6 +92,83 @@ jobs:
             && echo "OK: existing native runtime still packaged" \
             || echo "WARN: libaliasnull_runtime.so not found (native disabled?)"
 
+      # ---- Part 27-S1: CI arm64 base-userspace artifact pipeline ----
+      # Builds the AliasNull base-userspace probe executable (a real AArch64 ELF
+      # PIE) standalone from the same NDK 28.2 / CMake 3.22.1 toolchain the APK
+      # uses, validates it, hashes it, and uploads it as a proof artifact. It is
+      # intentionally NOT added to the APK or the base-userspace asset bundle
+      # yet: integration happens only after CI + device verification.
+      - name: Build AliasNull base userspace probe executable (arm64-v8a)
+        run: |
+          export ANDROID_NDK_HOME="${ANDROID_SDK_ROOT}/ndk/28.2.13676358"
+          export ANDROID_NDK_ROOT="${ANDROID_SDK_ROOT}/ndk/28.2.13676358"
+          export PATH="${ANDROID_SDK_ROOT}/cmake/3.22.1/bin:${PATH}"
+          cmake -S app/src/main/cpp \
+                -B build/userspace-probe \
+                -G Ninja \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_TOOLCHAIN_FILE="${ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake" \
+                -DANDROID_ABI=arm64-v8a \
+                -DANDROID_PLATFORM=android-26
+          cmake --build build/userspace-probe --target aliasnull_base_probe
+
+      - name: Validate base userspace probe ELF / architecture
+        run: |
+          BIN="build/userspace-probe/aliasnull_base_probe"
+          test -f "$BIN" || { echo "FAIL: executable was not produced"; exit 1; }
+          test -s "$BIN" || { echo "FAIL: executable is empty"; exit 1; }
+          file "$BIN"
+          file "$BIN" | grep -q "ELF 64-bit" || { echo "FAIL: not a 64-bit ELF"; exit 1; }
+          file "$BIN" | grep -q "ARM aarch64" || { echo "FAIL: not ARM AArch64"; exit 1; }
+          file "$BIN" | grep -qE "pie executable|shared object" || { echo "FAIL: not an executable image"; exit 1; }
+          readelf -h "$BIN" | grep -q "Machine:.*AArch64" || { echo "FAIL: readelf machine is not AArch64"; exit 1; }
+          readelf -h "$BIN" | grep -q "Class:.*ELF64" || { echo "FAIL: readelf class is not ELF64"; exit 1; }
+          echo "OK: validated as a 64-bit AArch64 ELF executable"
+
+      - name: Compute SHA-256 of the base userspace probe
+        run: |
+          BIN="build/userspace-probe/aliasnull_base_probe"
+          sha256sum "$BIN" | tee build/userspace-probe/aliasnull_base_probe.sha256
+          test -s build/userspace-probe/aliasnull_base_probe.sha256 || { echo "FAIL: SHA-256 not generated"; exit 1; }
+
+      - name: Generate provenance metadata
+        run: |
+          BIN="build/userspace-probe/aliasnull_base_probe"
+          SHA="$(awk '{print $1}' build/userspace-probe/aliasnull_base_probe.sha256)"
+          SIZE="$(wc -c < "$BIN")"
+          PROV="build/userspace-probe/aliasnull_base_probe.provenance.txt"
+          {
+            echo "component: aliasnull_base_probe"
+            echo "executable_version: 1"
+            echo "source_repository: AliasNull (aliasnull/AliasNullTerminal)"
+            echo "source_revision: ${GITHUB_SHA}"
+            echo "source_file: app/src/main/cpp/aliasnull_base_probe.cpp"
+            echo "build_system: CMake + Android NDK android.toolchain.cmake"
+            echo "toolchain_ndk: 28.2.13676358"
+            echo "target_abi: arm64-v8a"
+            echo "target_arch: AArch64 (64-bit)"
+            echo "android_platform: 26"
+            echo "workflow: ${GITHUB_WORKFLOW}"
+            echo "run_id: ${GITHUB_RUN_ID}"
+            echo "run_url: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo "filename: aliasnull_base_probe"
+            echo "file_size_bytes: ${SIZE}"
+            echo "sha256: ${SHA}"
+            echo "license: AliasNull project source terms (see repository LICENSE)"
+          } > "$PROV"
+          cat "$PROV"
+          test -s "$PROV" || { echo "FAIL: provenance metadata not generated"; exit 1; }
+
+      - name: Upload base userspace probe artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: aliasnull-base-userspace-arm64
+          path: |
+            build/userspace-probe/aliasnull_base_probe
+            build/userspace-probe/aliasnull_base_probe.sha256
+            build/userspace-probe/aliasnull_base_probe.provenance.txt
+          if-no-files-found: error
+
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
