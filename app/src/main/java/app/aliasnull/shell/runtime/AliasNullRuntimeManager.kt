@@ -85,17 +85,29 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
     private val nativeRuntime: AliasNullNativeRuntime = AliasNullNativeRuntime(application)
 
     /**
+     * The dedicated app-private install root for the AliasNull base userspace,
+     * under the application's filesDir - deliberately NOT the native runtime's
+     * noBackupFilesDir root (Part 27-S2-PERM-FIX). The bundled base executable
+     * must live where Android's SELinux policy permits the app to execve() it:
+     * files created under filesDir carry the app_data_file type, which the app
+     * may execute, whereas files under noBackupFilesDir carry no_backup_file,
+     * which denies execve. A byte-correct, 0700 executable under
+     * noBackupFilesDir therefore still fails to launch with EACCES ("Permission
+     * denied"), which is exactly the device failure this root relocation fixes.
+     */
+    private val baseUserspaceRoot: File = File(application.filesDir, BASE_USERSPACE_ROOT_NAME)
+
+    /**
      * The real AliasNull base-userspace bootstrap (Part 27-R): installs and
-     * verifies the bundled, versioned base artifact inside the app-private
-     * runtime root ([BaseUserspaceBootstrap]). It is a separate layer from the
-     * C++ native bootstrap, the AN Shell core and the native process runner, and
-     * it never executes anything. The Shell gate and the controlled native
-     * self-check require it to be verified ready before full runtime readiness
-     * is reported, so a missing or corrupted base userspace is never silently
-     * accepted.
+     * verifies the bundled, versioned base artifact inside [baseUserspaceRoot].
+     * It is a separate layer from the C++ native bootstrap, the AN Shell core
+     * and the native process runner, and it never executes anything. The Shell
+     * gate and the controlled native self-check require it to be verified ready
+     * before full runtime readiness is reported, so a missing or corrupted base
+     * userspace is never silently accepted.
      */
     private val baseUserspace: BaseUserspaceBootstrap =
-        BaseUserspaceBootstrap(application, nativeRuntime.runtimeRoot)
+        BaseUserspaceBootstrap(application, baseUserspaceRoot)
 
     /**
      * The AN Shell core executor: the genuinely executable backend that sends one
@@ -328,6 +340,10 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
         }
         val outcome = userspaceBootstrapResult
         if (outcome is BaseUserspaceResult.Ready) {
+            // Only after the new (filesDir) install is genuinely ready may the
+            // dead noBackupFilesDir legacy tree be removed; a fresh install is
+            // never destroyed because its replacement was not yet validated.
+            removeLegacyBaseUserspace(nativeRuntime.runtimeRoot)
             Log.i(
                 TAG,
                 "Base userspace ${if (outcome.justInstalled) "installed" else "verified"} " +
@@ -335,6 +351,36 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
             )
         } else if (outcome is BaseUserspaceResult.Failed) {
             Log.e(TAG, "Base userspace not ready: ${outcome.message}")
+        }
+    }
+
+    /**
+     * Removes the pre-PERM-FIX base-userspace tree that lived under the native
+     * runtime root ([legacyRuntimeRoot], noBackupFilesDir/runtime). That location
+     * carries the SELinux no_backup_file type, so its byte-correct, INSTALLED
+     * base executable could never be execve()'d by the app; the base userspace
+     * now installs under [baseUserspaceRoot] (filesDir). Only the exact
+     * base-userspace artifacts from that legacy layout are removed - the
+     * "userspace" layer, the "base-userspace-state" metadata record, and the base
+     * staging/backup dirs - never the native runtime's own state/tmp/metadata
+     * directories or any other content. Best-effort: a failure is logged and
+     * never fails the bootstrap, because readiness no longer depends on this
+     * legacy tree.
+     */
+    private fun removeLegacyBaseUserspace(legacyRuntimeRoot: File) {
+        val layer = File(legacyRuntimeRoot, LEGACY_SUBDIR_USERSPACE)
+        runCatching { if (layer.exists()) layer.deleteRecursively() }
+            .onFailure { Log.w(TAG, "Could not remove legacy base userspace tree at ${layer.path}") }
+        val metadataRecord = File(
+            File(legacyRuntimeRoot, LEGACY_SUBDIR_METADATA),
+            LEGACY_METADATA_FILE,
+        )
+        runCatching { metadataRecord.delete() }
+            .onFailure { Log.w(TAG, "Could not remove the legacy base-userspace metadata record") }
+        for (name in listOf(LEGACY_STAGING_DIR, LEGACY_BACKUP_DIR)) {
+            val dir = File(File(legacyRuntimeRoot, LEGACY_SUBDIR_TMP), name)
+            runCatching { if (dir.exists()) dir.deleteRecursively() }
+                .onFailure { Log.w(TAG, "Could not remove legacy base userspace dir at ${dir.path}") }
         }
     }
 
@@ -596,6 +642,26 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
 
     private companion object {
         const val TAG = "AliasNullRuntimeManager"
+
+        /**
+         * The directory name, under the application's filesDir, of the
+         * self-contained base-userspace install root. Distinct from the native
+         * runtime root (noBackupFilesDir/runtime) and from any other filesDir
+         * use, so the bundled base executable lives on the exec-capable
+         * app_data_file type.
+         */
+        const val BASE_USERSPACE_ROOT_NAME = "aliasnull_base_userspace"
+
+        // The historical pre-PERM-FIX base-userspace layout nested under the
+        // native runtime root (noBackupFilesDir/runtime). These names are frozen:
+        // they name only the artifacts the old base bootstrap created there, so
+        // cleanup never touches the native runtime's own state/tmp/metadata dirs.
+        private const val LEGACY_SUBDIR_USERSPACE = "userspace"
+        private const val LEGACY_SUBDIR_METADATA = "metadata"
+        private const val LEGACY_SUBDIR_TMP = "tmp"
+        private const val LEGACY_METADATA_FILE = "base-userspace-state"
+        private const val LEGACY_STAGING_DIR = "staging-userspace"
+        private const val LEGACY_BACKUP_DIR = "backup-userspace"
 
         /** Canned commands sent through the AN Shell core by the observational probe. */
         private val AN_SHELL_CORE_PROBES =

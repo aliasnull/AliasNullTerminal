@@ -194,7 +194,15 @@ jobs:
           file "$COMMITTED" | grep -q "ELF 64-bit" || { echo "FAIL: committed asset is not a 64-bit ELF"; exit 1; }
           file "$COMMITTED" | grep -q "ARM aarch64" || { echo "FAIL: committed asset is not ARM AArch64"; exit 1; }
           readelf -h "$COMMITTED" | grep -q "Machine:.*AArch64" || { echo "FAIL: committed asset machine is not AArch64"; exit 1; }
+          # Part 27-S2-PERM-FIX: a static assertion that the committed executable
+          # is INTENDED to be executable (it carries an exec bit in its stored
+          # mode). This proves packaging intent only - it does NOT prove that the
+          # Android/SELinux policy on a real device permits execve() of the file,
+          # which only the on-device Base Executable diagnostic can establish.
+          test -x "$COMMITTED" || { echo "FAIL: committed asset $COMMITTED is not stored as executable"; exit 1; }
+          test -x "$FRESH" || { echo "FAIL: fresh build $FRESH is not executable"; exit 1; }
           echo "OK: committed base-userspace executable reproduces the fresh build and matches the manifest constant"
+          echo "note: stored-exec-bit asserted for packaging intent; Android runtime exec is verified only on a device"
 
       - name: Generate provenance metadata
         run: |

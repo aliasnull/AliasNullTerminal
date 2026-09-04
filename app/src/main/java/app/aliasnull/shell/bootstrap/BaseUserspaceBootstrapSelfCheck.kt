@@ -62,13 +62,23 @@ internal object BaseUserspaceBootstrapSelfCheck {
             failedStateRepaired(application, scratchRoot),
             // 10. Every install write stays inside the intended userspace root.
             containment(application, scratchRoot),
-            // Part 27-S2: the bundled executable is present, verified as a real
-            // 64-bit AArch64 ELF with execute permission, and any missing,
-            // corrupted or permission-broken executable is detected and repaired.
-            executableInstalledAndValid(application, scratchRoot),
-            executableMissingRepaired(application, scratchRoot),
-            executableCorruptedRepaired(application, scratchRoot),
-            executablePermissionRepaired(application, scratchRoot),
+            // Part 27-S2 / Part 27-S2-PERM-FIX (Phase 6): the bundled executable
+            // must be a real regular file whose genuine lstat mode has the
+            // narrow owner-only 0700 owner-execute bit (the narrowest safe mode)
+            // and a verified 64-bit AArch64 ELF. A missing, corrupted,
+            // non-executable, wrong-type or FAILED installation is detected and
+            // repaired without weakening SHA or path containment. Mode checks are
+            // deterministic and real (android.system.Os.lstat on the actual file);
+            // they prove the mode, never that execve() is permitted under the
+            // device's SELinux policy - that is provable only by running the Base
+            // Executable diagnostic on a device.
+            executableFreshInstallValid(application, scratchRoot),
+            correctExecutablePermissionAccepted(application, scratchRoot),
+            missingExecutableRepaired(application, scratchRoot),
+            corruptedExecutableRepaired(application, scratchRoot),
+            removingExecutablePermissionInvalidates(application, scratchRoot),
+            nonExecutableRepaired(application, scratchRoot),
+            permissionRepairKeepsContainment(application, scratchRoot),
         )
     }
 
@@ -215,26 +225,59 @@ internal object BaseUserspaceBootstrapSelfCheck {
         )
     }
 
-    // ---- Part 27-S2 executable checks ----
+    // ---- Part 27-S2 / Part 27-S2-PERM-FIX executable permission checks ----
+    //
+    // These checks read the REAL on-disk lstat mode (via android.system.Os) of the
+    // executable a fresh install or a repair produced, never File.canExecute().
+    // They are deterministic and honest about scope: a passing mode check proves
+    // the file is a regular file with the narrow owner-only 0700 owner-execute
+    // mode, but it does NOT prove that execve() is permitted on a real device -
+    // SELinux may still deny execution, and only the on-device Base Executable
+    // diagnostic can establish that.
 
-    private fun executableInstalledAndValid(application: Application, scratchRoot: File): BaseUserspaceSelfCheckCase {
+    private fun executableFreshInstallValid(application: Application, scratchRoot: File): BaseUserspaceSelfCheckCase {
         val root = scratch(scratchRoot, "exec-installed")
         val bootstrap = freshBootstrap(application, root, "exec-installed")
-        bootstrap.run()
+        val run = bootstrap.run()
         val relative = BaseUserspaceArtifact.EXECUTABLE_FILE
         val exe = File(bootstrap.installedUserspaceRoot, relative)
+        val mode = BaseUserspaceFiles.modeBits(exe)
         val error = BaseUserspaceFiles.executableValidationError(bootstrap.installedUserspaceRoot, relative)
         val shaOk = BaseUserspaceFiles.sha256Of(exe) == BaseUserspaceArtifact.FILES[relative]
         val check = bootstrap.installedCheck()
-        val passed = check.ready && exe.isFile && exe.canExecute() && error == null && shaOk
+        val regular = mode != null && BaseUserspaceFiles.isRegularFileMode(mode)
+        val ownerExec = mode != null && BaseUserspaceFiles.isOwnerExecutableMode(mode)
+        val passed = run is BaseUserspaceResult.Ready && check.ready && exe.isFile &&
+            regular && ownerExec && error == null && shaOk
         return case(
-            "fresh install contains a valid 64-bit AArch64 executable (Part 27-S2)",
+            "fresh install creates a real owner-executable 64-bit AArch64 executable",
             passed,
-            "ready=${check.ready} executableError=$error shaOk=$shaOk",
+            "ready=${check.ready} regular=$regular ownerExec=$ownerExec " +
+                "mode=${mode?.let { Integer.toOctalString(it and PERM_BITS) }} " +
+                "executableError=$error shaOk=$shaOk",
         )
     }
 
-    private fun executableMissingRepaired(application: Application, scratchRoot: File): BaseUserspaceSelfCheckCase {
+    private fun correctExecutablePermissionAccepted(application: Application, scratchRoot: File): BaseUserspaceSelfCheckCase {
+        val root = scratch(scratchRoot, "exec-mode-accepted")
+        val bootstrap = freshBootstrap(application, root, "exec-mode-accepted")
+        bootstrap.run()
+        val relative = BaseUserspaceArtifact.EXECUTABLE_FILE
+        val exe = File(bootstrap.installedUserspaceRoot, relative)
+        val mode = BaseUserspaceFiles.modeBits(exe)
+        val narrowOwnerOnly = mode != null && BaseUserspaceFiles.isNarrowOwnerOnlyExecutableMode(mode)
+        val error = BaseUserspaceFiles.executableValidationError(bootstrap.installedUserspaceRoot, relative)
+        val check = bootstrap.installedCheck()
+        val passed = check.ready && narrowOwnerOnly && error == null
+        return case(
+            "the narrow owner-only 0700 executable mode is accepted as valid",
+            passed,
+            "ready=${check.ready} narrowOwnerOnly=$narrowOwnerOnly " +
+                "mode=${mode?.let { Integer.toOctalString(it and PERM_BITS) }} executableError=$error",
+        )
+    }
+
+    private fun missingExecutableRepaired(application: Application, scratchRoot: File): BaseUserspaceSelfCheckCase {
         val root = scratch(scratchRoot, "exec-missing")
         val bootstrap = freshBootstrap(application, root, "exec-missing")
         bootstrap.run()
@@ -251,7 +294,7 @@ internal object BaseUserspaceBootstrapSelfCheck {
         )
     }
 
-    private fun executableCorruptedRepaired(application: Application, scratchRoot: File): BaseUserspaceSelfCheckCase {
+    private fun corruptedExecutableRepaired(application: Application, scratchRoot: File): BaseUserspaceSelfCheckCase {
         val root = scratch(scratchRoot, "exec-corrupt")
         val bootstrap = freshBootstrap(application, root, "exec-corrupt")
         bootstrap.run()
@@ -262,41 +305,87 @@ internal object BaseUserspaceBootstrapSelfCheck {
         val run = bootstrap.run()
         val passed = !before.ready && run is BaseUserspaceResult.Ready && bootstrap.installedCheck().ready
         return case(
-            "corrupted executable content is detected and reinstalled",
+            "corrupted executable content is detected and reinstalled (SHA integrity enforced)",
             passed,
             "before.ready=${before.ready} mismatched=${before.mismatchedFiles} " +
                 "after.ready=${bootstrap.installedCheck().ready}",
         )
     }
 
-    private fun executablePermissionRepaired(application: Application, scratchRoot: File): BaseUserspaceSelfCheckCase {
-        val root = scratch(scratchRoot, "exec-perm")
-        val bootstrap = freshBootstrap(application, root, "exec-perm")
+    private fun removingExecutablePermissionInvalidates(application: Application, scratchRoot: File): BaseUserspaceSelfCheckCase {
+        val root = scratch(scratchRoot, "exec-non-exec")
+        val bootstrap = freshBootstrap(application, root, "exec-non-exec")
         bootstrap.run()
         val exe = File(bootstrap.installedUserspaceRoot, BaseUserspaceArtifact.EXECUTABLE_FILE)
-        exe.setExecutable(false)
+        stripOwnerExec(exe)
+        val before = bootstrap.installedCheck()
+        val passed = !before.ready &&
+            before.executableError != null &&
+            before.executableError.contains(OWNER_EXEC_ERROR_TOKEN)
+        return case(
+            "removing the executable permission makes the installation invalid",
+            passed,
+            "before.ready=${before.ready} executableError=${before.executableError}",
+        )
+    }
+
+    private fun nonExecutableRepaired(application: Application, scratchRoot: File): BaseUserspaceSelfCheckCase {
+        val root = scratch(scratchRoot, "exec-repair")
+        val bootstrap = freshBootstrap(application, root, "exec-repair")
+        bootstrap.run()
+        val exe = File(bootstrap.installedUserspaceRoot, BaseUserspaceArtifact.EXECUTABLE_FILE)
+        stripOwnerExec(exe)
         val before = bootstrap.installedCheck()
         val run = bootstrap.run()
-        val passed = !before.ready && run is BaseUserspaceResult.Ready && bootstrap.installedCheck().ready
+        val mode = BaseUserspaceFiles.modeBits(exe)
+        val ownerExecRestored = mode != null && BaseUserspaceFiles.isNarrowOwnerOnlyExecutableMode(mode)
+        val after = bootstrap.installedCheck()
+        val passed = !before.ready && run is BaseUserspaceResult.Ready && after.ready && ownerExecRestored
         return case(
-            "a broken executable permission is detected and repaired",
+            "the bootstrap repairs a non-executable executable",
             passed,
             "before.ready=${before.ready} executableError=${before.executableError} " +
-                "after.ready=${bootstrap.installedCheck().ready}",
+                "after.ready=${after.ready} ownerExecRestored=$ownerExecRestored " +
+                "mode=${mode?.let { Integer.toOctalString(it and PERM_BITS) }}",
         )
+    }
+
+    private fun permissionRepairKeepsContainment(application: Application, scratchRoot: File): BaseUserspaceSelfCheckCase {
+        val root = scratch(scratchRoot, "exec-repair-containment")
+        val bootstrap = freshBootstrap(application, root, "exec-repair-containment")
+        bootstrap.run()
+        val exe = File(bootstrap.installedUserspaceRoot, BaseUserspaceArtifact.EXECUTABLE_FILE)
+        stripOwnerExec(exe)
+        bootstrap.run()
+        val installed = bootstrap.installedUserspaceRoot
+        val present = BaseUserspaceArtifact.FILES.keys.all { File(installed, it).isFile }
+        val noStrayTopLevel = installed.listFiles()?.size == BaseUserspaceArtifact.FILES.size
+        val escaped = BaseUserspaceArtifact.FILES.keys.any { !BaseUserspaceFiles.isSafeRelativePath(it) }
+        val check = bootstrap.installedCheck()
+        val passed = check.ready && present && !escaped && (noStrayTopLevel ?: false)
+        return case(
+            "permission repair does not weaken path containment",
+            passed,
+            "ready=${check.ready} allPresent=$present noStrayTopLevel=$noStrayTopLevel",
+        )
+    }
+
+    /** Removes the owner-execute bit from [file] with the real chmod (mode 0600). */
+    private fun stripOwnerExec(file: File) {
+        android.system.Os.chmod(file.path, OWNER_RW_NO_EXEC)
     }
 
     // ---- Shared helpers ----
 
     private fun freshBootstrap(application: Application, scratchRoot: File, name: String): BaseUserspaceBootstrap {
-        val runtimeRoot = File(scratchRoot, "$name-runtime")
-        wipe(runtimeRoot)
-        runtimeRoot.mkdirs()
-        return BaseUserspaceBootstrap(application, runtimeRoot)
+        val root = File(scratchRoot, "$name-root")
+        wipe(root)
+        root.mkdirs()
+        return BaseUserspaceBootstrap(application, root)
     }
 
     private fun writeMetadata(bootstrap: BaseUserspaceBootstrap, state: BaseUserspaceBootstrapState) {
-        val root = bootstrap.installedUserspaceRoot.parentFile.parentFile // runtimeRoot
+        val root = bootstrap.installedUserspaceRoot.parentFile.parentFile // the bootstrap's root
         val metadataDir = File(root, "metadata")
         if (!metadataDir.exists()) metadataDir.mkdirs()
         File(metadataDir, "base-userspace-state").writeText(
@@ -327,4 +416,8 @@ internal object BaseUserspaceBootstrapSelfCheck {
 
     private fun report(vararg cases: BaseUserspaceSelfCheckCase): BaseUserspaceSelfCheckReport =
         BaseUserspaceSelfCheckReport(cases.toList())
+
+    private const val PERM_BITS = 0xFFF // low 12 st_mode bits, for a concise octal display
+    private const val OWNER_EXEC_ERROR_TOKEN = "owner-execute"
+    private const val OWNER_RW_NO_EXEC = 0x180 // 0600: owner read/write, no execute
 }

@@ -74,23 +74,27 @@ data class BaseUserspaceInstalledCheck(
 
 /**
  * Owns the real AliasNull base-userspace bootstrap (Part 27-R): it installs the
- * bundled, versioned base artifact into the app-private runtime root and keeps
- * an explicit, persisted installation record, so the runtime can report a
- * truthful, verified base-userspace readiness instead of trusting directory
- * existence.
+ * bundled, versioned base artifact into the app-private install root it is given
+ * and keeps an explicit, persisted installation record, so the runtime can
+ * report a truthful, verified base-userspace readiness instead of trusting
+ * directory existence.
  *
- * Location (under the existing AliasNull runtime root, app-private):
+ * Location (all under the caller-provided, app-private [root]):
  *
- *   <runtimeRoot>/
+ *   <root>/
  *       ├── metadata/  base-userspace-state        (the INSTALLING/INSTALLED/... record)
  *       ├── tmp/       staging-userspace, backup   (transient staging/backup)
  *       └── userspace/ base/  VERSION ARCH ...     (the installed artifact)
  *
- * This reuses the existing runtime root and adds the userspace layer on top; it
- * does NOT create a second runtime root and writes nothing outside app-private
- * storage. The installed base is real, versioned content verified by digest and
- * marker equality - never a fake rootfs and never marked installed by existence
- * alone.
+ * [root] is chosen by the caller and is a self-contained tree the bootstrap owns
+ * outright (it creates the metadata/tmp/userspace layers under it). The runtime
+ * manager passes a dedicated directory under the application's filesDir, whose
+ * app_data_file SELinux type permits the app to execve() the bundled base
+ * executable; the root must NOT sit under noBackupFilesDir (no_backup_file),
+ * which denies execve even for a byte-correct, 0700 file (Part 27-S2-PERM-FIX).
+ * Nothing is written outside app-private storage, and the installed base is
+ * real, versioned content verified by digest and marker equality - never a fake
+ * rootfs and never marked installed by existence alone.
  *
  * Atomicity: extraction happens into a staging directory; only after staging
  * validates is it promoted into place (rename), and INSTALLED is written only
@@ -109,20 +113,20 @@ data class BaseUserspaceInstalledCheck(
  */
 class BaseUserspaceBootstrap(
     application: Application,
-    private val runtimeRoot: File,
+    private val root: File,
 ) {
 
     private val appContext = application.applicationContext
 
-    /** The userspace layer under the runtime root (parent of the installed base). */
-    val userspaceRoot: File get() = File(runtimeRoot, SUBDIR_USERSPACE)
+    /** The userspace layer under the root (parent of the installed base). */
+    val userspaceRoot: File get() = File(root, SUBDIR_USERSPACE)
 
     /** The installed base-artifact directory (the future runner locates this root). */
     val installedUserspaceRoot: File get() = File(userspaceRoot, INSTALL_DIR_NAME)
 
-    private val metadataDir: File get() = File(runtimeRoot, SUBDIR_METADATA)
+    private val metadataDir: File get() = File(root, SUBDIR_METADATA)
     private val metadataFile: File get() = File(metadataDir, METADATA_FILE)
-    private val tmpDir: File get() = File(runtimeRoot, SUBDIR_TMP)
+    private val tmpDir: File get() = File(root, SUBDIR_TMP)
     private val stagingDir: File get() = File(tmpDir, STAGING_DIR_NAME)
     private val backupDir: File get() = File(tmpDir, BACKUP_DIR_NAME)
 
@@ -296,7 +300,7 @@ class BaseUserspaceBootstrap(
     }.getOrNull()
 
     private fun ensureBaseDirectories(): String? {
-        for (dir in listOf(runtimeRoot, userspaceRoot, metadataDir, tmpDir)) {
+        for (dir in listOf(root, userspaceRoot, metadataDir, tmpDir)) {
             if (!dir.exists() && !dir.mkdirs()) return "could not create ${dir.path}"
             if (!dir.isDirectory || !dir.canWrite()) return "not writable: ${dir.path}"
         }
