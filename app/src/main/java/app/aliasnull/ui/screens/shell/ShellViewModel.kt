@@ -9,6 +9,7 @@ import app.aliasnull.shell.execution.ShellExecutionEvent
 import app.aliasnull.shell.execution.ShellExecutionRequest
 import app.aliasnull.shell.runtime.AliasNullRuntimeManager
 import app.aliasnull.shell.runtime.ShellRuntimeManager
+import app.aliasnull.shell.terminal.TerminalSessionEvent
 import app.aliasnull.shell.terminal.TerminalSessionId
 import app.aliasnull.shell.terminal.TerminalSessionOutcome
 import kotlinx.coroutines.CancellationException
@@ -47,6 +48,14 @@ import kotlinx.coroutines.launch
  * honest outcome is ENGINE_UNAVAILABLE and every session keeps engineSessionId ==
  * null; the UI session always exists normally regardless of the engine result.
  *
+ * Part 26-P adds the engine-output observation seam and keeps it dormant: a UI
+ * session whose engine association is genuine observes that engine session's output
+ * events and appends each one to its own history - never to the active tab by
+ * default - and closing the UI session cancels the observation. Today no UI session
+ * ever holds a genuine association (the engine backend is unavailable), so no
+ * observer starts, nothing is collected and no event is fabricated; the seam is
+ * only exercised when a real backend exists.
+ *
  * Command execution is delegated to the runtime's [ShellCommandExecutor] (see
  * [ShellRuntimeManager]); this ViewModel never parses or simulates commands
  * itself. A submitted command is appended immediately, then the executor's event
@@ -74,6 +83,16 @@ class ShellViewModel(application: Application) : AndroidViewModel(application) {
     /** In-flight executions keyed by session id; at most one per session. */
     private val executionJobs = mutableMapOf<Long, Job>()
 
+    /**
+     * In-flight terminal-session event observations keyed by UI session id; at most
+     * one per session, and only ever populated when the session holds a genuine
+     * engine association. Deliberately separate from [executionJobs]: command
+     * execution and engine observation have independent lifecycles, so submitting a
+     * command or completing an execution must not cancel an active observation and
+     * vice versa.
+     */
+    private val terminalEventJobs = mutableMapOf<Long, Job>()
+
     private var nextSessionId = 0L
     private var nextEntryId = 0L
     private var sessionOrdinal = 0
@@ -97,7 +116,8 @@ class ShellViewModel(application: Application) : AndroidViewModel(application) {
      * attaches a real [TerminalSessionId] to the session; any other outcome keeps
      * [TerminalSession.engineSessionId] null and never fabricates an id. The
      * current engine backend is unavailable, so every new session stays unattached
-     * and still exists normally.
+     * and still exists normally. When an association is genuine, the session also
+     * starts observing that engine session's output (see [startObservingEngineSession]).
      */
     fun createSession() {
         val id = nextSessionId++
@@ -111,6 +131,9 @@ class ShellViewModel(application: Application) : AndroidViewModel(application) {
                 activeSessionId = id,
             )
         }
+        // Only a genuine engine association is ever observed. Today the engine
+        // backend is unavailable, so engineId is always null and no observer starts.
+        if (engineId != null) startObservingEngineSession(id, engineId)
     }
 
     /**
@@ -147,7 +170,8 @@ class ShellViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * Closes the session with [id]; refuses to remove the last remaining session.
      *
-     * Any in-flight UI execution is cancelled first. A closing session releases an
+     * Any in-flight UI execution and any in-flight engine-output observation are
+     * cancelled first. A closing session releases an
      * engine association only when it holds a genuine one: a non-null
      * [TerminalSession.engineSessionId] is delegated to the runtime orchestration
      * boundary ([ShellRuntimeManager.terminalSessionOrchestrator]), whose engine
@@ -163,6 +187,9 @@ class ShellViewModel(application: Application) : AndroidViewModel(application) {
             // Cancel any in-flight execution before removing the session so its event
             // stream cannot keep running after the session disappears.
             executionJobs.remove(id)?.cancel()
+            // Cancel any in-flight engine-output observation before removing the
+            // session and before releasing the engine association it was attached to.
+            terminalEventJobs.remove(id)?.cancel()
             // Release a genuine engine association through the orchestration
             // boundary. engineSessionId is null today, so this never fires.
             val engineId = snapshot.sessions.firstOrNull { it.id == id }?.engineSessionId
@@ -308,6 +335,50 @@ class ShellViewModel(application: Application) : AndroidViewModel(application) {
     private fun completeExecution(sessionId: Long) {
         executionJobs.remove(sessionId)
         setSessionExecuting(sessionId, false)
+    }
+
+    // ---- Engine event observation ----
+
+    /**
+     * Begins observing the engine session [engineSessionId]'s output events and
+     * routes each one to the UI session [uiSessionId].
+     *
+     * An observer is only ever started when a UI session exists and holds a genuine
+     * engine association, so this is called with a real engine id only when
+     * [requestEngineSession] produced one - which is never while the engine backend
+     * is unavailable. The engine itself still has the final say: if `outputEventsOf`
+     * returns null (the contract-only foundation does), no observer is started. A
+     * previously started observation for this UI session is replaced so at most one
+     * collector runs per session.
+     */
+    private fun startObservingEngineSession(uiSessionId: Long, engineSessionId: TerminalSessionId) {
+        val events = runtime.terminalSessionEngine.outputEventsOf(engineSessionId) ?: return
+        terminalEventJobs.remove(uiSessionId)?.cancel()
+        val job = viewModelScope.launch {
+            try {
+                events.collect { event -> applyEngineEvent(event, uiSessionId) }
+            } catch (cancelled: CancellationException) {
+                // Session closed or observation replaced; not an engine failure.
+                throw cancelled
+            } catch (t: Throwable) {
+                // The observation stream failed; never crash the screen or fabricate
+                // an engine event. The session simply stops receiving events.
+                terminalEventJobs.remove(uiSessionId)
+            }
+        }
+        if (job.isCompleted) terminalEventJobs.remove(uiSessionId) else terminalEventJobs[uiSessionId] = job
+    }
+
+    /**
+     * Translates one engine output event into an entry on the [uiSessionId] session's
+     * history. The engine event vocabulary is kept intact and is never merged with
+     * [ShellExecutionEvent] - observation is a distinct concern from command execution.
+     */
+    private fun applyEngineEvent(event: TerminalSessionEvent, uiSessionId: Long) {
+        when (event) {
+            is TerminalSessionEvent.Output -> appendToSession(uiSessionId, TerminalEntryType.OUTPUT, event.content)
+            is TerminalSessionEvent.Error -> appendToSession(uiSessionId, TerminalEntryType.ERROR, event.message)
+        }
     }
 
     // ---- Internals ----
