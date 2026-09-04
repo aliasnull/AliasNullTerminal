@@ -17,15 +17,22 @@ import app.aliasnull.shell.execution.ExecutionBackendStatus
  *   - never calls ProcessBuilder, Runtime.exec, fork/exec, or PTY APIs, and
  *   - never reports a command as running or started.
  *
- * Until a future part implements native execution, a fully bootstrapped runtime
- * still reports [ExecutionBackendStatus.NATIVE_EXECUTION_NOT_IMPLEMENTED].
+ * Since Part 27-P a real but *controlled internal* process capability exists
+ * behind [NativeProcessExecutionSeam] (policy-gated structured argv requests to
+ * the one-shot runner). That capability is deliberately NOT this command
+ * backend: it is not a [app.aliasnull.shell.execution.ShellCommandExecutor], is
+ * not in the execution router's AUTO order, and no Shell/unknown command ever
+ * reaches it. This object still reports that the native *command backend*
+ * cannot serve the Shell command contract.
  */
 object NativeExecutionSeam {
 
     /**
      * Describes the native backend's current ability to execute, in honest
-     * terms. When bootstrap is active but execution is not implemented, that is
-     * exactly what is reported - never a fabricated RUNNING/STARTED/process.
+     * terms. When bootstrap is active but the native runtime is not a Shell
+     * command backend, that is exactly what is reported - never a fabricated
+     * RUNNING/STARTED/process, and never a claim that Shell commands can be
+     * routed to the C++ runtime.
      */
     fun availability(
         nativeLibraryAvailable: Boolean,
@@ -44,7 +51,9 @@ object NativeExecutionSeam {
         else -> ExecutionBackendAvailability(
             backend = ExecutionBackend.NATIVE_RUNTIME,
             status = ExecutionBackendStatus.NATIVE_EXECUTION_NOT_IMPLEMENTED,
-            message = "Native execution is not implemented yet; this seam is contract-only and never executes commands.",
+            message = "The native runtime is not a Shell command backend and never receives a routed command; " +
+                "a separate controlled internal process seam (NativeProcessExecutionSeam) exists but is " +
+                "not connected to command routing.",
         )
     }
 }
