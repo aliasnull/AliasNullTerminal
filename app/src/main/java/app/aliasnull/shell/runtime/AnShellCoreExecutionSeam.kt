@@ -9,8 +9,9 @@ import app.aliasnull.shell.runtime.native.AnShellCoreBridgeStatus
 /**
  * Honest availability seam for the AN Shell core execution backend.
  *
- * Part 27-H adds a second genuinely executable backend: [ExecutionBackend.AN_SHELL_CORE],
- * which runs a command through the packaged Rust language core. This object answers
+ * [ExecutionBackend.AN_SHELL_CORE] is the sole command backend in this
+ * architecture: it runs a command through the packaged Rust language core. This
+ * object answers
  * "can that backend execute a command right now?" from the [AnShellCoreBridgeStatus]
  * the runtime manager already observes, mirroring how [NativeExecutionSeam] describes
  * the C++ native runtime backend. It deliberately:

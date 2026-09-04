@@ -16,12 +16,11 @@ data class ShellExecutionRequest(
  * Accepts a submitted command for a shell session and turns it into a stream of
  * [ShellExecutionEvent]s.
  *
- * This is the seam where the Shell UI's current temporary frontend backend can
- * later be swapped for a real AliasNull runtime executor without touching
- * [app.aliasnull.ui.screens.shell.ShellScreen] or its ViewModel contract.
- * Implementations must not depend on Compose UI and must never block the calling
- * thread; work that produces output over time does so by emitting events
- * gradually.
+ * This is the seam the Shell UI and its ViewModel execute commands through; the
+ * concrete executor behind it is chosen by the runtime and the execution routing
+ * layer (the AN Shell core once its bridge is READY). Implementations must not
+ * depend on Compose UI and must never block the calling thread; work that
+ * produces output over time does so by emitting events gradually.
  */
 interface ShellCommandExecutor {
     fun execute(request: ShellExecutionRequest): Flow<ShellExecutionEvent>

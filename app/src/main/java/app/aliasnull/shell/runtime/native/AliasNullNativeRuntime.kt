@@ -11,7 +11,7 @@ import java.io.File
  * This is deliberately NOT a Linux runtime, a shell, or a command backend. It
  * prepares the application-private storage that a future runtime will own and
  * drives the native bootstrap foundation behind [NativeRuntimeBridge]. Command
- * execution continues to live in the temporary frontend executor and is not
+ * execution is a separate concern owned by the AN Shell core backend and is not
  * affected by this class.
  *
  * The session-slot methods ([createFoundationSession], [closeFoundationSession],
@@ -47,8 +47,8 @@ class AliasNullNativeRuntime(context: Context) {
      * runtime directories, then ask the native layer to initialize. Idempotent
      * (the loader and the native layer both guard re-entry) and safe to call more
      * than once. Returns an honest [NativeRuntimeResult]; a failure here never
-     * implies a broken command executor - the temporary frontend executor is
-     * independent of this layer.
+     * implies a broken Shell - command execution is a separate concern (the AN
+     * Shell core backend) that is independent of this layer.
      */
     fun initialize(): NativeRuntimeResult {
         val root = runtimeRoot

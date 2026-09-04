@@ -7,13 +7,11 @@ package app.aliasnull.shell.execution
  * Exactly one backend is the active executor at a time, and this list is kept
  * small and honest:
  *
- *   [TEMPORARY]      - the in-process frontend executor. Always
- *                      [ExecutionBackendStatus.ACTIVE] and the guaranteed
- *                      fallback of the AUTO policy.
  *   [AN_SHELL_CORE]  - the AN Shell core backend: executes one command string
  *                      through the packaged Rust language core (lex -> parse ->
  *                      analyze -> execute_builtin). Genuinely executable only
- *                      while the libaliasnull_an_shell_core.so bridge is READY.
+ *                      while the libaliasnull_an_shell_core.so bridge is READY,
+ *                      and the ONLY shell command backend in this architecture.
  *   [NATIVE_RUNTIME] - the future AliasNull native runtime backend (process/PTY).
  *                      It exists only as a contract/seam for now; it can never
  *                      execute a command in this milestone.
@@ -23,7 +21,6 @@ package app.aliasnull.shell.execution
  * backend questions in these terms.
  */
 enum class ExecutionBackend {
-    TEMPORARY,
     AN_SHELL_CORE,
     NATIVE_RUNTIME,
 }
@@ -70,13 +67,4 @@ data class ExecutionBackendAvailability(
 ) {
     val canExecute: Boolean
         get() = status == ExecutionBackendStatus.ACTIVE
-
-    companion object {
-        /** Availability of the temporary frontend backend, which is always active. */
-        fun temporary(): ExecutionBackendAvailability = ExecutionBackendAvailability(
-            backend = ExecutionBackend.TEMPORARY,
-            status = ExecutionBackendStatus.ACTIVE,
-            message = "Temporary frontend executor is the active command execution backend.",
-        )
-    }
 }

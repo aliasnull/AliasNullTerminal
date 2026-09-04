@@ -4,7 +4,6 @@ import android.util.Log
 import app.aliasnull.shell.execution.ShellCommandExecutor
 import app.aliasnull.shell.execution.ShellExecutionEvent
 import app.aliasnull.shell.execution.ShellExecutionRequest
-import app.aliasnull.shell.execution.TemporaryShellCommandExecutor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -23,8 +22,8 @@ import kotlinx.coroutines.withContext
  * external-declaration owner of libaliasnull_an_shell_core.so is preserved and the
  * Kotlin <-> Rust boundary has exactly one voice. The Rust core is the single
  * language authority: Kotlin re-derives no command name, re-splits no words and
- * re-implements no help/about/echo semantics. [TemporaryShellCommandExecutor]
- * remains the behavioural reference and the fallback/compat backend.
+ * re-implements no help/about/echo semantics. This is the AN Shell core backend
+ * and the only command backend; there is no frontend fallback behind it.
  *
  * Result -> event mapping
  * -----------------------
@@ -33,13 +32,12 @@ import kotlinx.coroutines.withContext
  * honestly without inventing per-command interleaving:
  *
  *   - blank / whitespace-only input: [ShellExecutionEvent.Completed] only (the
- *     command was trimmed before the core saw it, mirroring the reference);
+ *     command was trimmed before the core saw it);
  *   - [AnShellCoreResultKind.SUCCESS]: [ShellExecutionEvent.Started], then each
  *     output unit as [ShellExecutionEvent.Output], then
  *     [ShellExecutionEvent.ClearScreen] when any command requested a clear, then
  *     [ShellExecutionEvent.Completed]. A success with no output and no clear
- *     request (for example a bare `echo`) is Started -> Completed, exactly like
- *     the reference executor.
+ *     request (for example a bare `echo`) is Started -> Completed.
  *
  *     The aggregate clear is emitted after the output units because the payload
  *     collapses a multi-command input into one output list plus one clear OR
@@ -61,9 +59,8 @@ import kotlinx.coroutines.withContext
  *
  *     Only for the unknown-command category
  *     ([AnShellCoreErrorCategory.SEMANTIC_UNKNOWN_COMMAND]) does the executor
- *     also emit the same "Type 'help' ..." hint line the reference executor
- *     shows, so the unknown-command experience keeps behavioural parity while the
- *     wording stays the core's own authoritative text. Every other category is
+ *     also emit a "Type 'help' ..." hint line, so an unknown command points the
+ *     user at the built-in list. Every other category is
  *     rendered without a hint, because the hint is a property of that one
  *     semantic rule -- not of message text -- and Kotlin does not parse text to
  *     decide it.
@@ -78,11 +75,9 @@ import kotlinx.coroutines.withContext
  *     infrastructure-level failure ends with [ShellExecutionEvent.Failed] and
  *     never with Completed, so these kinds are emitted as Failed.
  *
- * Deliberate divergences from the reference executor (all inherited from the
- * core's documented semantics, not recreated here): quoted echo arguments are
- * echoed without their quote characters, and runs of separator whitespace inside
- * an echo collapse to a single space. For ordinary single-space, unquoted input
- * the two backends agree byte-for-byte.
+ * Documented core semantics honoured here (not recreated in Kotlin): quoted
+ * echo arguments are echoed without their quote characters, and runs of
+ * separator whitespace inside an echo collapse to a single space.
  *
  * This executor never touches a process, a PTY, the filesystem or the C++
  * AliasNull native runtime. The whole command runs synchronously through the
@@ -91,8 +86,8 @@ import kotlinx.coroutines.withContext
 class AnShellCoreCommandExecutor : ShellCommandExecutor {
 
     override fun execute(request: ShellExecutionRequest): Flow<ShellExecutionEvent> = flow {
-        // The Shell trims before submission, but keep parity with the reference
-        // executor's own blank-input guard: nothing is sent to the core.
+        // The Shell trims before submission; keep the same blank-input guard
+        // here so nothing is ever sent to the core for an empty line.
         val command = request.command.trim()
         if (command.isEmpty()) {
             emit(ShellExecutionEvent.Completed())
@@ -122,7 +117,7 @@ class AnShellCoreCommandExecutor : ShellCommandExecutor {
                 emit(ShellExecutionEvent.Error("\$ ${messageOf(result)}"))
 
                 if (error?.category == AnShellCoreErrorCategory.SEMANTIC_UNKNOWN_COMMAND) {
-                    emit(ShellExecutionEvent.Output("Type 'help' to view available frontend commands."))
+                    emit(ShellExecutionEvent.Output("Type 'help' to view available commands."))
                 }
                 emit(ShellExecutionEvent.Completed(exitCode = 1))
 

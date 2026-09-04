@@ -53,8 +53,8 @@ data class AnShellCoreBridgeStatus(
  * backend. It is not a ShellCommandExecutor and is not registered with the
  * execution router. The genuinely executable backend that calls [execute] is
  * [AnShellCoreCommandExecutor] (see that class); it is registered with the
- * router and is what AUTO prefers once this bridge is READY, falling back to the
- * temporary frontend executor until then. The runtime manager may also probe
+ * router and is what AUTO selects once this bridge is READY. Until the bridge
+ * verifies READY no command is executed. The runtime manager may also probe
  * this object observationally (see AliasNullRuntimeManager); nothing in the UI
  * or a ViewModel calls this object directly.
  *

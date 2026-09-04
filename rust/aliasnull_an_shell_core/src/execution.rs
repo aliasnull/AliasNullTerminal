@@ -37,24 +37,23 @@
 //! Adding an error type here would only fabricate an unreachable failure, so
 //! this milestone chooses the smallest honest API instead.
 //!
-//! Output parity
-//! -------------
-//! The Android command executor (`TemporaryShellCommandExecutor`) is the
-//! behavioural reference for what each built-in produces. `help` and `about`
-//! reproduce that executor's stable, user-visible text byte-for-byte (the
-//! `HELP_TEXT` / `ABOUT_TEXT` constants are exact copies of the executor's
-//! constants). `echo` joins the already-interpreted [`Argument`] values with a
-//! single space, which is byte-identical to the reference for ordinary
-//! single-space input; see [`execute_builtin`] for the documented differences.
+//! Output ownership
+//! ----------------
+//! The AN Shell core (this crate) is the sole and authoritative owner of the
+//! `help` and `about` text: the [`HELP_TEXT`] / [`ABOUT_TEXT`] constants below
+//! are the definitive user-visible strings, emitted verbatim as one output unit
+//! and rendered unchanged by the Android bridge. There is no Kotlin or frontend
+//! executor to mirror. `echo` joins the already-interpreted [`Argument`] values
+//! with a single space; see [`execute_builtin`] for the documented details.
 
 use crate::ast::Argument;
 use crate::semantic::{BuiltinCommand, BuiltinCommandKind};
 
-/// The `help` output, byte-for-byte the text the current Android executor
-/// emits. One output unit: the text contains embedded newlines and one blank
-/// line, matching the reference payload exactly.
+/// The `help` output: the authoritative user-visible help text for the AN Shell
+/// core built-ins. One output unit; the text contains embedded newlines and one
+/// blank line, and the Android bridge renders it verbatim.
 const HELP_TEXT: &str = concat!(
-    "AliasNull Shell - temporary frontend commands\n",
+    "AliasNull Shell - built-in commands\n",
     "\n",
     "Available commands:\n",
     "help       Show this help text\n",
@@ -62,19 +61,21 @@ const HELP_TEXT: &str = concat!(
     "clear      Clear the terminal history\n",
     "echo ...   Print the given text back\n",
     "\n",
-    "These commands are simulated by the frontend executor. No Linux\n",
-    "runtime is connected."
+    "These commands are executed by the packaged AN Shell core. A Linux\n",
+    "process runtime is not connected yet."
 );
 
-/// The `about` output, byte-for-byte the text the current Android executor
-/// emits. The text itself states that the shell runtime backend is not
-/// connected yet; this milestone adds no capability claim beyond that copy.
+/// The `about` output: the authoritative user-visible about text for the AN
+/// Shell core. It is capability-honest: it describes what the packaged core
+/// executes today and states plainly what does not exist yet, without claiming
+/// any Linux/process/PTY/filesystem capability.
 const ABOUT_TEXT: &str = concat!(
     "AliasNull\n",
     "Mobile terminal · Native runtime · Linux environment\n",
     "\n",
-    "The shell runtime backend is not connected yet. Only the temporary\n",
-    "frontend commands listed by 'help' are available."
+    "This shell executes the AN Shell built-in commands (help, about,\n",
+    "clear, echo) through the packaged language core. A Linux process\n",
+    "runtime, filesystem and package manager are not implemented yet."
 );
 
 /// The in-memory result of executing one built-in command.
@@ -94,7 +95,7 @@ pub struct ExecutionResult {
     /// Zero or more emitted output units, in order.
     ///
     /// Each unit is the exact text one built-in emission produced -- the same
-    /// payload the reference executor emits as one `Output` event -- so a unit
+    /// payload the Android bridge renders as one `Output` event -- so a unit
     /// may contain embedded newlines, and blank lines are preserved as empty
     /// content inside a unit. `help` and `about` emit exactly one unit each,
     /// `echo` emits at most one, and `clear` emits none.
@@ -111,7 +112,7 @@ pub struct ExecutionResult {
 /// The command must come from semantic analysis (or an equivalent
 /// construction); execution does not re-check that the name is a built-in.
 ///
-/// Per-command behaviour mirrors the current Android executor:
+/// Per-command behaviour:
 ///
 /// * `help`  -> one output unit: [`HELP_TEXT`].
 /// * `about` -> one output unit: [`ABOUT_TEXT`].
@@ -123,23 +124,22 @@ pub struct ExecutionResult {
 ///   already removed by the lexer, so a quoted argument echoes without its
 ///   quote characters.
 ///
-/// Like the reference executor, `help`, `about` and `clear` ignore any
-/// arguments that follow the name; only `echo` consumes its arguments.
+/// `help`, `about` and `clear` ignore any arguments that follow the name; only
+/// `echo` consumes its arguments.
 ///
-/// Output parity notes (deliberate)
-/// --------------------------------
+/// Echo semantics (deliberate)
+/// ---------------------------
 /// For ordinary single-space input (`echo hello world`) the joined value is
-/// byte-identical to the reference executor's output. Two differences exist,
-/// both required by operating on interpreted [`Argument`] values rather than
-/// raw source text (this crate's fixed boundary):
+/// exactly the source words. Two properties follow from operating on
+/// interpreted [`Argument`] values rather than raw source text (this crate's
+/// fixed boundary), and are intentional, not silent text invention:
 ///
-/// * quotes are stripped from quoted arguments, whereas the reference
-///   executor, which slices raw text, currently shows the quote characters;
+/// * quotes are stripped from quoted arguments (the lexer already removed
+///   them), and
 /// * runs of separator whitespace collapse to a single space, because the
 ///   lexer already turned them into token boundaries.
 ///
-/// These are semantic equivalence for a future native core, not silent text
-/// invention; `help`/`about` keep exact byte parity.
+/// `help` and `about` output their constants verbatim.
 pub fn execute_builtin(command: &BuiltinCommand) -> ExecutionResult {
     match command.kind {
         BuiltinCommandKind::Help => ExecutionResult {
@@ -228,16 +228,16 @@ mod tests {
     }
 
     #[test]
-    fn help_output_matches_reference_text() {
+    fn help_output_matches_the_authoritative_help_text() {
         let result = execute_one("help");
-        // HELP_TEXT is an exact copy of the current executor's constant; the
-        // output unit reproduces it byte-for-byte as one multi-line unit.
+        // HELP_TEXT is the AN Shell core's authoritative help text; the output
+        // unit reproduces it verbatim as one multi-line unit.
         assert_eq!(result.output, vec![HELP_TEXT.to_owned()]);
         assert!(result.output[0].contains('\n'));
     }
 
     #[test]
-    fn help_ignores_stray_arguments_like_the_reference() {
+    fn help_ignores_stray_arguments() {
         let result = execute_one("help whatever");
         assert_eq!(result.output, vec![HELP_TEXT.to_owned()]);
         assert!(!result.clear_requested);
@@ -251,17 +251,17 @@ mod tests {
     }
 
     #[test]
-    fn about_output_matches_reference_and_stays_capability_honest() {
+    fn about_output_is_authoritative_and_capability_honest() {
         let result = execute_one("about");
         assert_eq!(result.output, vec![ABOUT_TEXT.to_owned()]);
-        // Capability honesty: the copy itself still states the runtime backend
-        // is not connected; nothing here claims new runtime capability.
-        assert!(result.output[0].contains("backend is not connected yet"));
+        // Capability honesty: the text says plainly that a Linux process
+        // runtime, filesystem and package manager are not implemented yet.
+        assert!(result.output[0].contains("not implemented yet"));
         assert!(result.output[0].contains('\n'));
     }
 
     #[test]
-    fn about_ignores_stray_arguments_like_the_reference() {
+    fn about_ignores_stray_arguments() {
         let result = execute_one("about now");
         assert_eq!(result.output, vec![ABOUT_TEXT.to_owned()]);
         assert!(!result.clear_requested);
@@ -288,7 +288,7 @@ mod tests {
     }
 
     #[test]
-    fn clear_ignores_stray_arguments_like_the_reference() {
+    fn clear_ignores_stray_arguments() {
         let result = execute_one("clear now");
         assert!(result.output.is_empty());
         assert!(result.clear_requested);

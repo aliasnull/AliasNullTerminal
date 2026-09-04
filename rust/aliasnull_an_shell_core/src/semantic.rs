@@ -2,9 +2,10 @@
 //!
 //! This module interprets a parsed `Program` syntactically/semantically: it
 //! decides which commands name one of the real AN Shell built-ins and preserves
-//! everything else that the executor would need. It is a pure, dependency-free
-//! function over the AST -- `analyze` reads a `Program` and returns either a
-//! typed `SemanticProgram` of recognised built-ins or a `SemanticError`.
+//! everything else that the execution stage would need. It is a pure,
+//! dependency-free function over the AST -- `analyze` reads a `Program` and
+//! returns either a typed `SemanticProgram` of recognised built-ins or a
+//! `SemanticError`.
 //!
 //! Strict non-execution boundary
 //! -----------------------------
@@ -18,8 +19,8 @@ use crate::source::SourceSpan;
 
 /// A recognised AN Shell built-in command name.
 ///
-/// This is the exact vocabulary of the executor that is the source of truth
-/// (the app's temporary shell executor): a command whose name resolves to one
+/// This is the AN Shell core's own command vocabulary (the sole command
+/// backend): a command whose name resolves to one
 /// of these kinds is a built-in; any other name is an `UnknownCommand` error.
 /// The kinds carry no behaviour -- they are tags, not handlers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -39,10 +40,10 @@ impl BuiltinCommandKind {
     /// Resolves a command *name* to its built-in kind, or `None` when the name
     /// does not match any built-in.
     ///
-    /// Case behaviour mirrors the real executor, which lowercases the name
-    /// before comparing it to the literal set `{help, about, clear, echo}`.
+    /// Case behaviour: the name is matched case-insensitively against the
+    /// literal set `{help, about, clear, echo}`.
     /// The whole vocabulary is ASCII, so ASCII case-insensitive comparison is
-    /// exactly equivalent to the executor's full-Unicode `lowercase()` for
+    /// exactly equivalent to full-Unicode `lowercase()` for
     /// every name that could possibly equal one of these four literals.
     pub fn from_name(name: &str) -> Option<Self> {
         if name.eq_ignore_ascii_case("help") {
@@ -107,8 +108,8 @@ pub struct SemanticProgram {
 pub enum SemanticErrorKind {
     /// The command's name does not match any built-in. Also produced when the
     /// name position holds a quoted string rather than a bare word, because
-    /// the real executor never strips those quotes before resolving the name
-    /// (see the module documentation on name resolution).
+    /// the core resolves a name only from a bare word and never strips quotes
+    /// before comparing (see the module documentation on name resolution).
     UnknownCommand,
     /// A command had no arguments at all, so it has no name to resolve.
     /// Unreachable from a parsed `Program`.
@@ -163,9 +164,9 @@ impl std::error::Error for SemanticError {}
 /// (`Word`) argument:
 ///
 /// * a quoted first argument (an `Argument::String`) is never resolved as a
-///   name. The real executor reads the raw command text and splits it before
-///   any quote handling, so it would see the surrounding quotes inside the
-///   name and report the command as unknown. Accepting `"echo"` here because
+///   name: the lexer preserves the surrounding quote characters inside the raw
+///   first token, so the core sees them in the name position and reports the
+///   command as unknown. Accepting `"echo"` here because
 ///   its interpreted value happens to be `echo` would silently change product
 ///   behaviour, so `analyze` reports `UnknownCommand` at the quoted token.
 /// * a bare name is resolved case-insensitively against the built-in
@@ -181,8 +182,8 @@ impl std::error::Error for SemanticError {}
 /// -----------------
 /// The name is consumed; every later argument is preserved verbatim (its kind,
 /// value and span) as `BuiltinCommand::arguments`. No argument list is
-/// validated against its built-in -- arity and echo-printing rules are the
-/// executor's business, not this crate's.
+/// validated against its built-in -- arity and echo-printing rules are an
+/// execution concern, not this crate's.
 ///
 /// Spans
 /// -----
@@ -220,8 +221,8 @@ fn analyze_command(command: &Command) -> Result<BuiltinCommand, SemanticError> {
                 None => return Err(SemanticError::new(SemanticErrorKind::UnknownCommand, *span)),
             }
         }
-        // A quoted first argument: the executor would see the quotes in the
-        // raw name, so this never resolves to a built-in.
+        // A quoted first argument: the surrounding quotes sit in the raw name
+        // token, so this never resolves to a built-in.
         Argument::String { span, .. } => {
             return Err(SemanticError::new(SemanticErrorKind::UnknownCommand, *span));
         }
@@ -401,8 +402,8 @@ mod tests {
 
     #[test]
     fn quoted_first_argument_is_not_a_builtin_name() {
-        // The executor would see the quotes in the raw name, so `"echo"` never
-        // resolves to Echo even though its interpreted value is "echo".
+        // The quotes sit in the raw name token, so `"echo"` never resolves to
+        // Echo even though its interpreted value is "echo".
         let err = analyze_source("\"echo\"").unwrap_err();
         assert_eq!(err.kind, SemanticErrorKind::UnknownCommand);
         assert_eq!(err.span, SourceSpan::new(0, 6));

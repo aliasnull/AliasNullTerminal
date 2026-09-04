@@ -442,7 +442,7 @@ mod tests {
     fn help_succeeds_through_the_shared_pipeline() {
         let output = output_of("help");
         assert_eq!(output.len(), 1);
-        assert!(output[0].starts_with("AliasNull Shell - temporary frontend commands\n"));
+        assert!(output[0].starts_with("AliasNull Shell - built-in commands\n"));
         assert!(output[0].contains("Available commands:\n"));
         assert!(!clear_of("help"));
     }
@@ -562,7 +562,7 @@ mod tests {
             }
         }
         // A quoted "name" keeps its quotes: that is the raw text the user typed,
-        // and the reference executor reports the quoted name verbatim too.
+        // and the core reports the quoted name verbatim as the subject.
         match run_command("\"echo\" hi") {
             AnShellCoreOutcome::SemanticError { subject, .. } => {
                 assert_eq!(subject.as_deref(), Some("\"echo\""));

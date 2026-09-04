@@ -4,14 +4,15 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -20,6 +21,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -55,6 +57,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModelStoreOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
+import app.aliasnull.shell.runtime.ShellBackendPhase
 import kotlinx.coroutines.launch
 
 private const val Prompt = "$"
@@ -63,16 +66,24 @@ private const val LivePromptLineKey = "live-prompt"
 /**
  * Terminal-style Shell for AliasNull.
  *
- * The main area is one continuous, dark, text-focused terminal surface: rendered
- * history lines followed by a live prompt line ("$ ") that carries the current
- * typing. There is no separate input box or message-style send region. Session
- * management (switch / create / close) lives in a hidden left drawer opened from
- * a trigger in the shortcut row below the terminal. Multiple independent
- * sessions are backed by [ShellViewModel]; only the active session is rendered.
- * Commands route through the AN Shell core when its bridge verifies READY and
- * through the built-in fallback command set otherwise; the slim status row above
- * the shortcut bar reports which backend answers, derived from the runtime's
- * authoritative readiness -- never from a UI-side guess.
+ * The Shell's main area shows exactly one of three things, chosen by the runtime
+ * gate the ViewModel observes ([ShellBackendPhase]):
+ *
+ *   - INITIALIZING: a truthful, non-interactive pane while the runtime bootstraps
+ *     and verifies the AN Shell core (no fake progress, no fabricated delay, no
+ *     command input);
+ *   - FAILED: "Unable to start the AN Shell" with the runtime's user-safe reason
+ *     and a Retry action that re-runs the real verification;
+ *   - READY: the interactive terminal, described below.
+ *
+ * The terminal area is one continuous, dark, text-focused terminal surface:
+ * rendered history lines followed by a live prompt line ("$ ") that carries the
+ * current typing. There is no separate input box or message-style send region.
+ * Session management (switch / create / close) lives in a hidden left drawer
+ * opened from a trigger in the shortcut row below the terminal. Multiple
+ * independent sessions are backed by [ShellViewModel]; only the active session is
+ * rendered. Commands route through the AN Shell core and are accepted only while
+ * the gate is READY; the Shell never falls back to a built-in command set.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -130,50 +141,93 @@ fun ShellScreen(
                 .fillMaxSize()
                 .imePadding(),
         ) {
-            TerminalSurface(
-                session = active,
-                focusRequester = inputFocusRequester,
-                listState = listState,
-                onTap = focusTerminalInput,
-                onInputChange = viewModel::onInputChanged,
-                onSubmit = viewModel::submitCommand,
-                onHistoryPrevious = viewModel::previousCommand,
-                onHistoryNext = viewModel::nextCommand,
-                modifier = Modifier.weight(1f),
-            )
-            RuntimeStatusRow(state.runtimeStatus)
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            ShellShortcutBar(
-                onKey = viewModel::onExtraKey,
-                onOpenSessions = { scope.launch { drawerState.open() } },
-                onShowKeyboard = focusTerminalInput,
-            )
+            when (state.runtimeStatus.phase) {
+                ShellBackendPhase.INITIALIZING -> ShellInitializingPane(Modifier.weight(1f))
+                ShellBackendPhase.FAILED -> ShellFailedStartPane(
+                    reason = state.runtimeStatus.failureMessage,
+                    onRetry = viewModel::retryInitialize,
+                    modifier = Modifier.weight(1f),
+                )
+                ShellBackendPhase.READY -> {
+                    TerminalSurface(
+                        session = active,
+                        focusRequester = inputFocusRequester,
+                        listState = listState,
+                        onTap = focusTerminalInput,
+                        onInputChange = viewModel::onInputChanged,
+                        onSubmit = viewModel::submitCommand,
+                        onHistoryPrevious = viewModel::previousCommand,
+                        onHistoryNext = viewModel::nextCommand,
+                        modifier = Modifier.weight(1f),
+                    )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    ShellShortcutBar(
+                        onKey = viewModel::onExtraKey,
+                        onOpenSessions = { scope.launch { drawerState.open() } },
+                        onShowKeyboard = focusTerminalInput,
+                    )
+                }
+            }
         }
     }
 }
 
 /**
- * A slim, non-interactive status line between the terminal and the shortcut bar
- * reporting which command backend is answering. It is derived from the runtime's
- * authoritative AN Shell core readiness and is truthful by construction: READY is
- * only ever shown once the core bridge verifies READY, and the fallback phrasing
- * applies whenever the core is not currently ready, including before the first
- * bootstrap check completes.
+ * Truthful, non-interactive pane shown while the runtime bootstraps and verifies
+ * the AN Shell core ([ShellBackendPhase.INITIALIZING]). The lines correspond to
+ * real work only - bootstrapping the runtime, verifying the core - never a fake
+ * percentage or an arbitrary delay, and the Shell accepts no command input here.
  */
 @Composable
-private fun RuntimeStatusRow(status: ShellRuntimeStatus) {
-    val text = when (status) {
-        ShellRuntimeStatus.AN_SHELL_READY -> "AN Shell core ready"
-        ShellRuntimeStatus.AN_SHELL_NOT_READY -> "AN Shell core not ready - using built-in fallback"
+private fun ShellInitializingPane(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier.fillMaxWidth(),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = "Initializing the AliasNull runtime...\nVerifying the AN Shell core...",
+            style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
-    Text(
-        text = text,
-        style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 6.dp),
-    )
+}
+
+/**
+ * Pane shown when the runtime's real verification attempt finished without a
+ * READY AN Shell core ([ShellBackendPhase.FAILED]). It shows the runtime's
+ * user-safe [reason] and a Retry action that re-runs that real verification
+ * ([ShellViewModel.retryInitialize]); READY is never manufactured by the UI.
+ */
+@Composable
+private fun ShellFailedStartPane(
+    reason: String?,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier.fillMaxWidth(),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                text = "Unable to start the AN Shell",
+                style = MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Monospace),
+                color = MaterialTheme.colorScheme.error,
+            )
+            if (!reason.isNullOrEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = reason,
+                    style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(Modifier.height(16.dp))
+            Button(onClick = onRetry) {
+                Text("Retry")
+            }
+        }
+    }
 }
 
 /**

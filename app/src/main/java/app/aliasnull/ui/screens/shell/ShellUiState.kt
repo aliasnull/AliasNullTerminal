@@ -1,24 +1,9 @@
 package app.aliasnull.ui.screens.shell
 
 import androidx.compose.ui.text.input.TextFieldValue
+import app.aliasnull.shell.runtime.ShellBackendState
 import app.aliasnull.shell.terminal.TerminalSessionId
 import app.aliasnull.shell.terminal.TerminalSessionState
-
-/**
- * Truthful AN Shell core readiness for the Shell UI, derived from the runtime's
- * authoritative backend availability -- never guessed by the UI and never a
- * second readiness state machine. This distinguishes "the Rust AN Shell core is
- * READY and the AUTO route prefers it" from "not ready", and never claims the
- * separate C++ native runtime is active.
- */
-enum class ShellRuntimeStatus {
-    /** The AN Shell core is not READY (still verifying or genuinely unavailable);
-     * the guaranteed fallback backend answers commands. */
-    AN_SHELL_NOT_READY,
-
-    /** The AN Shell core bridge is READY and AUTO routes commands through it. */
-    AN_SHELL_READY,
-}
 
 /**
  * One independent Shell UI session. Each session owns its own rendered history,
@@ -91,12 +76,13 @@ data class ShellUiState(
     val sessions: List<TerminalSession> = emptyList(),
     val activeSessionId: Long = NO_SESSION,
     /**
-     * Truthful runtime/backend readiness, derived from the runtime's
-     * authoritative AN Shell core availability. Global (not per session); see
-     * [ShellRuntimeStatus]. Starts AN_SHELL_NOT_READY, which is truthful until
-     * the runtime's bootstrap check verifies the core.
+     * The Shell's command-backend gate, as published by the runtime. This is the
+     * value the UI observes and branches on (INITIALIZING / READY / FAILED); the
+     * UI does not derive or fabricate it. Global (not per session). Starts at the
+     * truthful pre-verification INITIALIZING phase until the runtime's real
+     * verification attempt publishes a READY or FAILED gate.
      */
-    val runtimeStatus: ShellRuntimeStatus = ShellRuntimeStatus.AN_SHELL_NOT_READY,
+    val runtimeStatus: ShellBackendState = ShellBackendState.INITIALIZING,
 ) {
     val activeSession: TerminalSession?
         get() = sessions.firstOrNull { it.id == activeSessionId }

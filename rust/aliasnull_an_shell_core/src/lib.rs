@@ -22,8 +22,9 @@
 //!   four supported built-ins (help, about, clear, echo); it does not spawn
 //!   processes, open a PTY or reach into a Linux runtime;
 //! * it is not ShellCommandExecutor, ExecutionRouter, TerminalSessionEngine or
-//!   TerminalSessionOrchestrator, and Part 27-G does not route a single command
-//!   to it (the temporary frontend executor remains the visible command path);
+//!   TerminalSessionOrchestrator, and it is not itself a command backend; the
+//!   AN Shell core backend in Kotlin routes commands to it through the bridge,
+//!   and since Part 27-M it is the sole command backend (no frontend fallback);
 //! * since Part 27-G the packaged `.so` IS loaded by Kotlin -- but only through
 //!   the dedicated `AnShellCoreNativeBridge` JNI owner, never from the UI, the
 //!   ViewModel or a command handler. The C++ `NativeRuntimeBridge` remains the

@@ -6,7 +6,6 @@ import app.aliasnull.shell.execution.ExecutionBackend
 import app.aliasnull.shell.execution.ExecutionBackendAvailability
 import app.aliasnull.shell.execution.ExecutionRouter
 import app.aliasnull.shell.execution.ShellCommandExecutor
-import app.aliasnull.shell.execution.TemporaryShellCommandExecutor
 import app.aliasnull.shell.runtime.native.AliasNullNativeRuntime
 import app.aliasnull.shell.runtime.native.AnShellCoreBridge
 import app.aliasnull.shell.runtime.native.AnShellCoreBridgeState
@@ -33,15 +32,23 @@ import kotlinx.coroutines.launch
  * The app's [ShellRuntimeManager]: owns the honest runtime lifecycle and drives
  * the native bootstrap foundation behind [AliasNullNativeRuntime].
  *
- * Command execution resolves through the execution routing layer: once the AN
- * Shell core bridge is READY, the AUTO route prefers the AN Shell core executor
- * (a genuinely executable backend over the Rust language core); until then - and
- * whenever that bridge is not ready - every command goes to the temporary
- * frontend executor, which is never removed and remains the guaranteed fallback.
- * Native bootstrap success only moves [state]
- * to [ShellRuntimeState.NativeBootstrapReady] - it does not make the C++ runtime
- * execute commands, and a bootstrap failure only moves it to [ShellRuntimeState.Error]
- * while the Shell keeps working through the frontend executor.
+ * Command execution resolves through the execution routing layer, which today
+ * selects exactly one genuinely executable backend: the AN Shell core
+ * ([ExecutionBackend.AN_SHELL_CORE]), which sends one command string through the
+ * packaged Rust language core. That backend executes only while its bridge is
+ * READY; when it is not ready no backend executes and no fallback ever runs. The
+ * C++ native backend is a future seam and never executes a command.
+ *
+ * Shell readiness is one derived gate ([shellBackendState]): READY is published
+ * only after a real attempt verifies the AN Shell core bridge and that
+ * verification reports READY; FAILED only after such an attempt completes
+ * without a READY core; INITIALIZING while an attempt runs or none has finished.
+ * The gate is published by this manager at real lifecycle points and is never
+ * manufactured by a timer or the UI. Native bootstrap success only moves [state]
+ * to [ShellRuntimeState.NativeBootstrapReady] - it is a separate (C++)
+ * foundation axis that never executes commands and does not by itself move the
+ * Shell gate; a bootstrap failure only moves [state] to [ShellRuntimeState.Error]
+ * and never stops the independent AN Shell core gate from being verified.
  *
  * On a successful bootstrap the manager also reserves one native session slot
  * (see [AliasNullNativeRuntime.createFoundationSession]) so the Kotlin <-> JNI
@@ -56,10 +63,10 @@ import kotlinx.coroutines.launch
  * survives ordinary UI recomposition.
  *
  * Besides the [executor] command surface the manager owns a read-only terminal
- * session engine boundary ([terminalSessionEngine]); like the frontend manager it
- * hosts the contract-only foundation, so the boundary is always queryable and
- * reports that no interactive session backend exists. The engine is a sibling of
- * command execution, never a replacement for it, and is released in [shutdown].
+ * session engine boundary ([terminalSessionEngine]); it hosts the contract-only
+ * foundation, so the boundary is always queryable and reports that no
+ * interactive session backend exists. The engine is a sibling of command
+ * execution, never a replacement for it, and is released in [shutdown].
  * Above the engine the manager also owns the terminal-session orchestration
  * boundary ([terminalSessionOrchestrator]): the single place a future UI session
  * owner requests an engine session. It is hosted by the contract-only foundation
@@ -71,11 +78,8 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
 
     private val nativeRuntime: AliasNullNativeRuntime = AliasNullNativeRuntime(application)
 
-    /** The genuinely executable temporary backend - the guaranteed AUTO fallback. */
-    private val temporaryExecutor: ShellCommandExecutor = TemporaryShellCommandExecutor()
-
     /**
-     * The AN Shell core executor: a genuinely executable backend that sends one
+     * The AN Shell core executor: the genuinely executable backend that sends one
      * command string through the packaged Rust language core whenever its bridge
      * is READY. It calls only the [AnShellCoreBridge] facade, never JNI directly.
      */
@@ -83,16 +87,16 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
 
     /**
      * The execution routing layer: the single decision point that resolves each
-     * execution request to a genuinely executable backend. Once the AN Shell core
-     * bridge is READY the AUTO policy selects [anShellCoreExecutor]; otherwise it
-     * selects [temporaryExecutor]. The C++ native backend is never executable and
-     * never receives a command. Exposed through [ShellRuntimeManager.executor] so
-     * the Shell and ViewModel never see backend selection or JNI.
+     * execution request to a genuinely executable backend. AUTO selects the AN
+     * Shell core exactly when its bridge is READY and otherwise selects nothing
+     * (a command is never handed to a seam or a fallback). The C++ native backend
+     * is never executable and never receives a command. Exposed through
+     * [ShellRuntimeManager.executor] so the Shell and ViewModel never see backend
+     * selection or JNI.
      */
     private val executionRouter: ExecutionRouter by lazy {
         ExecutionRouter(
             executableBackends = mapOf(
-                ExecutionBackend.TEMPORARY to temporaryExecutor,
                 ExecutionBackend.AN_SHELL_CORE to anShellCoreExecutor,
             ),
             availabilityOf = ::backendAvailability,
@@ -119,6 +123,10 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
     private val _state = MutableStateFlow(ShellRuntimeState.FrontendOnly)
     override val state: StateFlow<ShellRuntimeState> = _state.asStateFlow()
 
+    /** The Shell gate (Part 27-M): derived READY/FAILED from real bridge verification. */
+    private val _shellBackendState = MutableStateFlow(ShellBackendState.INITIALIZING)
+    override val shellBackendState: StateFlow<ShellBackendState> = _shellBackendState.asStateFlow()
+
     /** Outcome of the most recent bootstrap attempt; null until one completes. */
     @Volatile
     var nativeBootstrapResult: NativeRuntimeResult? = null
@@ -135,13 +143,13 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
     // ---- Observational AN Shell core bridge check (Part 27-G) ----
     //
     // These fields record a diagnostics-only verification of the packaged
-    // libaliasnull_an_shell_core.so that runs once after each bootstrap attempt.
-    // The check loads the core, verifies its API version and sends a fixed set of
+    // libaliasnull_an_shell_core.so that runs after each bootstrap attempt. The
+    // check loads the core, verifies its API version and sends a fixed set of
     // canned commands through the full native pipeline. It never routes a user
     // command to the core itself. The READY status this check establishes is the
     // status [backendAvailability] reports for the AN Shell core backend, so a
-    // successful check is what lets the AUTO policy prefer that backend for later
-    // commands.
+    // successful check is what lets the AUTO policy execute commands, and it is
+    // the single authoritative readiness fact the Shell gate derives READY from.
 
     /** Status of the most recent AN Shell core bridge check; null until it runs. */
     @Volatile
@@ -168,10 +176,10 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
     private var bootstrapJob: Job? = null
 
     init {
-        // One line at construction: the routing decision the Shell will use.
-        // The core bridge has not been verified yet, so AUTO resolves to the
-        // temporary backend here; once initialize() verifies the AN Shell core it
-        // becomes READY and AUTO prefers that backend for later commands. The
+        // One line at construction: the routing decision the Shell will use. The
+        // core bridge has not been verified yet, so AUTO resolves to no
+        // executable backend here (BACKEND_SELECTION_FAILED); once initialize()
+        // verifies the AN Shell core it becomes READY and AUTO selects it. The
         // route's selected backend is always the actual one.
         val route = executionRouter.resolveAuto()
         Log.i(
@@ -191,35 +199,69 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
 
     override fun initialize() {
         synchronized(this) {
-            val current = _state.value
-            if (current == ShellRuntimeState.Initializing ||
-                current == ShellRuntimeState.NativeBootstrapReady ||
-                current == ShellRuntimeState.Ready ||
-                current == ShellRuntimeState.Stopped
-            ) {
-                return
-            }
+            // One attempt at a time, and never a re-verification once the AN
+            // Shell core is genuinely READY. The gate stays INITIALIZING while an
+            // attempt runs or none has completed; a finished attempt publishes
+            // its own READY/FAILED value.
             if (bootstrapJob?.isActive == true) return
+            if (_shellBackendState.value.phase == ShellBackendPhase.READY) return
+            launchInitializationAttempt()
+        }
+    }
 
+    /**
+     * Re-runs the real initialization/verification lifecycle after a FAILED gate.
+     * READY can only ever be re-established through genuine bridge verification,
+     * never by a timer or a manufactured value. No-op while an attempt is running
+     * or once the backend is already READY.
+     */
+    override fun retryInitialize() {
+        synchronized(this) {
+            if (bootstrapJob?.isActive == true) return
+            if (_shellBackendState.value.phase != ShellBackendPhase.FAILED) return
+            launchInitializationAttempt()
+        }
+    }
+
+    /** Starts one genuine initialization/verification attempt on the background scope. */
+    private fun launchInitializationAttempt() {
+        _shellBackendState.value = ShellBackendState.INITIALIZING
+        bootstrapJob = scope.launch { runInitializationAttempt() }
+    }
+
+    private suspend fun runInitializationAttempt() {
+        // Native-foundation (C++) axis: bootstrap only when this attempt is the
+        // first one (FrontendOnly) or a prior bootstrap failed (Error). Once the
+        // foundation is already bootstrapped (a prior FAILED gate with a READY
+        // native bootstrap), a retry leaves it in place - re-running it would not
+        // change the gate and would double-reserve a session slot. The AN Shell
+        // core gate is independent of this axis and is verified below either way.
+        val startState = _state.value
+        if (startState != ShellRuntimeState.NativeBootstrapReady &&
+            startState != ShellRuntimeState.Ready
+        ) {
             _state.value = ShellRuntimeState.Initializing
-            bootstrapJob = scope.launch {
-                val result = runCatching { nativeRuntime.initialize() }
-                    .getOrElse { NativeRuntimeResult.unexpected(it) }
-                nativeBootstrapResult = result
-                if (!currentCoroutineContext().isActive) return@launch // cancelled during bootstrap
-                _state.value =
-                    if (result.success) ShellRuntimeState.NativeBootstrapReady else ShellRuntimeState.Error
-                verifyAnShellCoreBridge()
-                if (result.success) {
-                    Log.i(TAG, "Runtime state -> NativeBootstrapReady (version ${result.runtimeVersion})")
-                    reserveFoundationSession()
-                    logNativeExecutionSeam()
-                } else {
-                    Log.e(TAG, "Runtime state -> Error: ${result.code} ${result.message}")
-                    logNativeExecutionSeam()
-                }
+            val result = runCatching { nativeRuntime.initialize() }
+                .getOrElse { NativeRuntimeResult.unexpected(it) }
+            nativeBootstrapResult = result
+            if (!currentCoroutineContext().isActive) return // cancelled during bootstrap
+            _state.value =
+                if (result.success) ShellRuntimeState.NativeBootstrapReady else ShellRuntimeState.Error
+            if (result.success) {
+                Log.i(TAG, "Runtime state -> NativeBootstrapReady (version ${result.runtimeVersion})")
+                reserveFoundationSession()
+                logNativeExecutionSeam()
+            } else {
+                Log.e(TAG, "Runtime state -> Error: ${result.code} ${result.message}")
+                logNativeExecutionSeam()
             }
         }
+        if (!currentCoroutineContext().isActive) return
+
+        // The Shell gate is decided ONLY by genuine bridge verification - the one
+        // authoritative readiness path. Never by the bootstrap above.
+        verifyAnShellCoreBridge()
+        publishShellBackendGate()
     }
 
     override fun shutdown() {
@@ -234,12 +276,17 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
             runCatching { nativeRuntime.shutdown() }
                 .onFailure { Log.w(TAG, "Native shutdown reported a problem", it) }
             // With the native (C++) bootstrap released, no native session or
-            // bootstrap state remains; the frontend executor stays available and
-            // the AN Shell core backend is untouched (it is independent of the
-            // C++ runtime's lifecycle).
-            if (_state.value == ShellRuntimeState.NativeBootstrapReady) {
+            // bootstrap state remains. The AN Shell core backend is independent
+            // of the C++ runtime's lifecycle, so it is not torn down here; its
+            // gate still returns to the truthful pre-verification phase so a
+            // later initialize() re-verifies from scratch.
+            val current = _state.value
+            if (current == ShellRuntimeState.NativeBootstrapReady ||
+                current == ShellRuntimeState.Initializing
+            ) {
                 _state.value = ShellRuntimeState.FrontendOnly
             }
+            _shellBackendState.value = ShellBackendState.INITIALIZING
         }
     }
 
@@ -247,7 +294,9 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
      * Reserves one native session slot to exercise the Kotlin <-> JNI session
      * lifecycle after a successful bootstrap. Failure is logged but never
      * downgrades the bootstrap state: a session slot is an independent
-     * foundation, not the execution runtime.
+     * foundation, not the execution runtime. Only ever called once per successful
+     * bootstrap (a retry after a FAILED gate does not re-enter the bootstrap
+     * branch, so no slot is double-reserved).
      */
     private fun reserveFoundationSession() {
         val session = runCatching { nativeRuntime.createFoundationSession() }
@@ -297,10 +346,10 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
      * of canned commands through the full native language pipeline, recording
      * each outcome. Diagnostic by intent: the results are exposed as read-only
      * properties and logged. The READY status this check establishes is the same
-     * status [backendAvailability] reports for the AN Shell core backend, so a
-     * successful check is what lets the AUTO policy prefer that backend for later
-     * commands; the check itself never routes a user command. A bridge failure is
-     * recorded and logged, never thrown.
+     * status [backendAvailability] reports for the AN Shell core backend - the
+     * single authoritative readiness fact the Shell gate derives READY from; the
+     * check itself never routes a user command. A bridge failure is recorded and
+     * logged, never thrown.
      */
     private fun verifyAnShellCoreBridge() {
         val bridgeStatus = runCatching { AnShellCoreBridge.verify() }
@@ -343,12 +392,45 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
         Log.i(TAG, anShellCoreProbeSummary.orEmpty())
     }
 
+    /**
+     * Publishes the Shell gate from the single authoritative readiness path:
+     * [AnShellCoreBridge.currentStatus] surfaced through [backendAvailability].
+     * READY exactly when that availability can execute; otherwise FAILED with a
+     * user-safe reason. Called only after a real [verifyAnShellCoreBridge]
+     * attempt, so the value always reflects a genuine verification outcome.
+     */
+    private fun publishShellBackendGate() {
+        val availability = backendAvailability(ExecutionBackend.AN_SHELL_CORE)
+        _shellBackendState.value =
+            if (availability.canExecute) {
+                ShellBackendState.READY
+            } else {
+                ShellBackendState.failed(userSafeBridgeReason(anShellCoreBridgeStatus))
+            }
+    }
+
+    /**
+     * Renders the AN Shell core bridge failure as a short, user-safe reason. The
+     * precise diagnostic detail (library path, native API hex, probe summary)
+     * stays in the diagnostics/logs; the gate carries the plain explanation the
+     * UI can show next to Retry.
+     */
+    private fun userSafeBridgeReason(status: AnShellCoreBridgeStatus?): String = when (status?.state) {
+        AnShellCoreBridgeState.LOAD_FAILED ->
+            "The AN Shell core could not be loaded on this device."
+        AnShellCoreBridgeState.VERSION_MISMATCH ->
+            "The AN Shell core version does not match this build."
+        AnShellCoreBridgeState.READY,
+        AnShellCoreBridgeState.NOT_ATTEMPTED,
+        -> "The AN Shell core did not report ready."
+        null -> "The AN Shell core could not be verified."
+    }
+
     /** Renders a probe command compactly for the one-line log summary. */
     private fun displayProbe(probe: String): String =
         if (probe.isEmpty()) "empty" else probe
 
     override fun backendAvailability(backend: ExecutionBackend): ExecutionBackendAvailability = when (backend) {
-        ExecutionBackend.TEMPORARY -> ExecutionBackendAvailability.temporary()
         ExecutionBackend.AN_SHELL_CORE -> AnShellCoreExecutionSeam.availability(AnShellCoreBridge.currentStatus())
         ExecutionBackend.NATIVE_RUNTIME -> NativeExecutionSeam.availability(
             nativeLibraryAvailable = nativeRuntime.isNativeLibraryLoaded,

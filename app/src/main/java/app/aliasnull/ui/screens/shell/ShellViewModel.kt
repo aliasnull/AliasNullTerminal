@@ -5,12 +5,11 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import app.aliasnull.shell.execution.ExecutionBackend
 import app.aliasnull.shell.execution.ShellExecutionEvent
 import app.aliasnull.shell.execution.ShellExecutionRequest
 import app.aliasnull.shell.runtime.AliasNullRuntimeManager
+import app.aliasnull.shell.runtime.ShellBackendPhase
 import app.aliasnull.shell.runtime.ShellRuntimeManager
-import app.aliasnull.shell.runtime.ShellRuntimeState
 import app.aliasnull.shell.terminal.TerminalInputOutcome
 import app.aliasnull.shell.terminal.TerminalInputResult
 import app.aliasnull.shell.terminal.TerminalSessionEvent
@@ -19,7 +18,6 @@ import app.aliasnull.shell.terminal.TerminalSessionOutcome
 import app.aliasnull.shell.terminal.TerminalSessionState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -101,8 +99,10 @@ import kotlinx.coroutines.launch
  * This is an [AndroidViewModel] only so the runtime manager can receive the
  * [Application] context for application-private storage. Creating the ViewModel
  * (the first time the Shell is opened) also kicks off the honest native runtime
- * bootstrap via [ShellRuntimeManager.initialize]; native bootstrap is a separate
- * concern from command execution and never replaces the temporary executor.
+ * bootstrap and AN Shell core verification via [ShellRuntimeManager.initialize];
+ * the Shell's command gate ([ShellBackendPhase]) is published by the runtime and
+ * only ever observed here, never derived or replaced. Commands are submitted only
+ * while that gate is READY (see [submitCommand]).
  */
 class ShellViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -143,12 +143,12 @@ class ShellViewModel(application: Application) : AndroidViewModel(application) {
     init {
         // Always start with one active session.
         createSession()
-        // Start the native runtime bootstrap when the Shell is first needed; it is
+        // Start the runtime initialization when the Shell is first needed; it is
         // asynchronous, idempotent and never blocks the UI thread.
         runtime.initialize()
-        // Keep the truthful AN Shell core readiness label in step with the runtime:
-        // the label is derived from the runtime's authoritative backend availability,
-        // never guessed, and never claims READY before verification completes.
+        // Keep the Shell's command gate in step with the runtime: the gate value is
+        // published by the runtime at real verification points and is only observed
+        // here - never guessed, never re-derived from another state machine.
         observeRuntimeStatus()
     }
 
@@ -282,6 +282,12 @@ class ShellViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * Submits the active session's command line and starts execution.
      *
+     * A command is executed only while the Shell's command gate is
+     * [ShellBackendPhase.READY] (the AN Shell core bridge verified READY). While
+     * the gate is INITIALIZING or FAILED nothing is executed and no command output
+     * is fabricated; the defensive check below guards every submit/IME path, and
+     * the UI additionally hides the terminal while the gate is not READY.
+     *
      * The command entry is appended and the session is marked executing
      * synchronously; the runtime executor is then collected asynchronously and
      * each [ShellExecutionEvent] is applied to the submitting session as it
@@ -291,6 +297,7 @@ class ShellViewModel(application: Application) : AndroidViewModel(application) {
     fun submitCommand() {
         val snapshot = _uiState.value
         val session = snapshot.activeSession ?: return
+        if (snapshot.runtimeStatus.phase != ShellBackendPhase.READY) return
         val command = session.input.text.trim()
         if (command.isEmpty() || session.isExecuting) return
 
@@ -321,8 +328,8 @@ class ShellViewModel(application: Application) : AndroidViewModel(application) {
                 completeExecution(session.id)
             }
         }
-        // Temporary commands complete synchronously on Main.immediate, before the
-        // job is stored; do not keep the finished job in the live-executions map.
+        // An execution that finished before the job was stored (an already-completed
+        // event burst) must not linger in the live-executions map.
         if (job.isCompleted) executionJobs.remove(session.id) else executionJobs[session.id] = job
     }
 
@@ -544,48 +551,32 @@ class ShellViewModel(application: Application) : AndroidViewModel(application) {
     private fun isBoundToEngineSession(uiSessionId: Long, engineSessionId: TerminalSessionId): Boolean =
         _uiState.value.sessions.any { it.id == uiSessionId && it.engineSessionId == engineSessionId }
 
-    // ---- Runtime status (derived, not owned) ----
+    // ---- Shell command gate (observed, not owned) ----
 
     /**
-     * Observes the runtime lifecycle and keeps [ShellUiState.runtimeStatus]
-     * truthful. The status is derived from the runtime's authoritative backend
-     * availability ([ShellRuntimeManager.backendAvailability]); the ViewModel only
-     * reads and exposes it, never duplicating bridge verification or JNI. Until a
-     * bootstrap attempt finishes the label stays AN_SHELL_NOT_READY, which is
-     * truthful: the fallback answers commands until the core verifies READY.
+     * Observes the runtime's Shell gate and mirrors it into
+     * [ShellUiState.runtimeStatus]. The gate is published by the runtime at real
+     * verification points ([ShellRuntimeManager.shellBackendState]); the ViewModel
+     * only reads and exposes it, never owning bridge verification, JNI or any
+     * second readiness state machine. The UI branches on its phase.
      */
     private fun observeRuntimeStatus() {
         viewModelScope.launch {
-            runtime.state.collect { runtimeState ->
-                if (runtimeState.isTerminalBootstrapState()) {
-                    // The manager runs its AN Shell core bridge check right after
-                    // publishing the terminal bootstrap state, so the label is
-                    // refreshed once more after a short settle to reflect the
-                    // settled READY/unavailable outcome instead of the instant of
-                    // the state write.
-                    refreshRuntimeStatus()
-                    delay(AN_SHELL_STATUS_SETTLE_MILLIS)
-                    refreshRuntimeStatus()
+            runtime.shellBackendState.collect { gate ->
+                _uiState.update { state ->
+                    if (state.runtimeStatus == gate) state else state.copy(runtimeStatus = gate)
                 }
             }
         }
     }
 
-    private fun refreshRuntimeStatus() {
-        val availability = runtime.backendAvailability(ExecutionBackend.AN_SHELL_CORE)
-        val status =
-            if (availability.canExecute) ShellRuntimeStatus.AN_SHELL_READY
-            else ShellRuntimeStatus.AN_SHELL_NOT_READY
-        _uiState.update { state ->
-            if (state.runtimeStatus == status) state else state.copy(runtimeStatus = status)
-        }
-    }
-
-    private fun ShellRuntimeState.isTerminalBootstrapState(): Boolean = when (this) {
-        ShellRuntimeState.FrontendOnly, ShellRuntimeState.Initializing -> false
-        ShellRuntimeState.NativeBootstrapReady, ShellRuntimeState.Ready,
-        ShellRuntimeState.Stopped, ShellRuntimeState.Error -> true
-    }
+    /**
+     * Asks the runtime to re-run its real initialization/verification lifecycle
+     * after a FAILED gate. The runtime re-verifies the AN Shell core bridge; READY
+     * can only be re-established through that genuine verification, never by a
+     * manufactured value. No-op when the gate is not FAILED or an attempt runs.
+     */
+    fun retryInitialize() = runtime.retryInitialize()
 
     // ---- Internals ----
 
@@ -718,17 +709,5 @@ class ShellViewModel(application: Application) : AndroidViewModel(application) {
             val session = state.activeSession ?: return@update state
             state.copy(sessions = state.sessions.map { if (it.id == session.id) transform(it) else it })
         }
-    }
-
-    private companion object {
-        /**
-         * Allowance after the manager publishes its terminal bootstrap state for the
-         * AN Shell core bridge verification (run immediately afterwards inside the
-         * same initialization) to settle, so the runtime-status label reflects the
-         * settled READY/unavailable outcome rather than the transient instant of the
-         * state write. This is a read-offset for a label, not a retry or a wait on
-         * the runtime itself.
-         */
-        const val AN_SHELL_STATUS_SETTLE_MILLIS: Long = 300L
     }
 }

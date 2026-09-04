@@ -78,12 +78,12 @@ class ExecutionRouter(
 
     /**
      * AUTO / default policy: select the first genuinely executable backend from
-     * a fixed preference order. The AN Shell core backend is preferred once its
-     * libaliasnull_an_shell_core.so bridge is READY; the temporary frontend
-     * executor is the always-available fallback. The C++ native runtime is never
-     * executable at this milestone, so AUTO resolves to
-     * [ExecutionBackend.AN_SHELL_CORE] when ready and otherwise to
-     * [ExecutionBackend.TEMPORARY].
+     * a fixed preference order. The AN Shell core is the only shell command
+     * backend, so AUTO resolves to it exactly when its
+     * libaliasnull_an_shell_core.so bridge is READY. The C++ native runtime is
+     * never executable at this milestone, so it is not in the AUTO order. When
+     * the AN Shell core is not ready there is no fallback: AUTO returns a
+     * non-executable route and nothing is run.
      */
     fun resolveAuto(): ExecutionRoute {
         for (backend in AUTO_PREFERENCE_ORDER) {
@@ -94,7 +94,7 @@ class ExecutionRouter(
             backend = null,
             status = ExecutionBackendStatus.BACKEND_SELECTION_FAILED,
             executor = null,
-            message = "No genuinely executable backend could be selected.",
+            message = "No genuinely executable backend could be selected; the AN Shell core is not ready.",
         )
     }
 
@@ -138,13 +138,11 @@ class ExecutionRouter(
     }
 
     private companion object {
-        /** AUTO preference order: the AN Shell core first once its bridge is READY,
-         * then the native runtime once it becomes genuinely executable, and the
-         * temporary frontend executor as the always-available fallback. */
+        /** AUTO preference order: the AN Shell core, the only shell command backend.
+         * It is checked against its live availability, so AUTO resolves to it only
+         * once its bridge is genuinely READY; otherwise AUTO selects nothing. */
         val AUTO_PREFERENCE_ORDER = listOf(
             ExecutionBackend.AN_SHELL_CORE,
-            ExecutionBackend.NATIVE_RUNTIME,
-            ExecutionBackend.TEMPORARY,
         )
     }
 }

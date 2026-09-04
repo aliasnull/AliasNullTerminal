@@ -141,9 +141,9 @@ data class TerminalInputResult(
  * This is a CONTRACT foundation only in Part 26-K. It is deliberately NOT a
  * [app.aliasnull.shell.execution.ShellCommandExecutor], is NOT registered with the
  * execution routing layer, and does NOT route, replace or bypass
- * ExecutionRouter. Commands keep flowing to the temporary frontend executor through
- * the existing, unchanged path. Nothing here forks, execs, spawns, creates a PTY or
- * calls JNI, and no live session is ever opened by the foundation of this
+ * ExecutionRouter. Commands keep flowing through the existing, unchanged batch
+ * path (the AN Shell core backend). Nothing here forks, execs, spawns, creates a
+ * PTY or calls JNI, and no live session is ever opened by the foundation of this
  * milestone.
  *
  * Conceptually a future real engine hosts sessions as follows:
