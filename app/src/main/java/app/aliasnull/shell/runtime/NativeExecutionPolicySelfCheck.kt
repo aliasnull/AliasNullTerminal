@@ -82,7 +82,7 @@ internal object NativeExecutionPolicySelfCheck {
             "B. the base policy allows exactly the verified base executable's LINKER_LAUNCH request",
         ) {
             val decision = NativeExecutionPolicy.decideBaseExecutable(baseRequest, verifiedExecutable)
-            decision is NativeExecutionPolicyDecision.Allowed to describe(decision)
+            (decision is NativeExecutionPolicyDecision.Allowed) to describe(decision)
         }
 
         cases += decisionCase(
