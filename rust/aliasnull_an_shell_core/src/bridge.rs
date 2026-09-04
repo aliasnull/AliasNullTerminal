@@ -305,7 +305,7 @@ mod tests {
         assert_eq!(output_of("HELP").len(), 1);
         assert_eq!(output_of("ECHO hello"), vec!["hello".to_owned()]);
         assert_eq!(output_of("About").len(), 1);
-        assert!(!clear_of("cLeAr"));
+        assert!(clear_of("cLeAr"));
     }
 
     #[test]
