@@ -33,7 +33,7 @@ class TemporaryShellCommandExecutor : ShellCommandExecutor {
             "clear" -> emit(ShellExecutionEvent.ClearScreen)
             "echo" -> if (args.isNotEmpty()) emit(ShellExecutionEvent.Output(args))
             else -> {
-                emit(ShellExecutionEvent.Error("AN Shell: command not found: $normalized"))
+                emit(ShellExecutionEvent.Error("\$ command not found: $normalized"))
                 emit(ShellExecutionEvent.Output("Type 'help' to view available frontend commands."))
                 emit(ShellExecutionEvent.Completed(exitCode = 1))
                 return@flow

@@ -52,9 +52,10 @@ import kotlinx.coroutines.withContext
  *   - the language-pipeline rejections [AnShellCoreResultKind.LEXER_ERROR],
  *     [AnShellCoreResultKind.PARSE_ERROR] and
  *     [AnShellCoreResultKind.SEMANTIC_ERROR] are command results: Started, then
- *     an [ShellExecutionEvent.Error] whose text is `"AN Shell: "` plus the core's
- *     own concise [AnShellCoreError.userMessage], then
- *     [ShellExecutionEvent.Completed] with exit code 1. The product prefix is the
+ *     an [ShellExecutionEvent.Error] whose text is `"$ "` (a terminal-style
+ *     dollar-space prefix) plus the core's own concise
+ *     [AnShellCoreError.userMessage], then
+ *     [ShellExecutionEvent.Completed] with exit code 1. The prefix is the
  *     only text Kotlin adds: the wording itself is the core's authoritative,
  *     user-safe message (no byte offsets, never the internal diagnostic).
  *
@@ -118,7 +119,7 @@ class AnShellCoreCommandExecutor : ShellCommandExecutor {
             AnShellCoreResultKind.PARSE_ERROR,
             AnShellCoreResultKind.SEMANTIC_ERROR -> {
                 val error = result.error
-                emit(ShellExecutionEvent.Error("AN Shell: ${messageOf(result)}"))
+                emit(ShellExecutionEvent.Error("\$ ${messageOf(result)}"))
 
                 if (error?.category == AnShellCoreErrorCategory.SEMANTIC_UNKNOWN_COMMAND) {
                     emit(ShellExecutionEvent.Output("Type 'help' to view available frontend commands."))
