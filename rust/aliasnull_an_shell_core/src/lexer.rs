@@ -332,7 +332,7 @@ mod tests {
     fn ascii_span_offsets_are_byte_exact() {
         let toks = lex_text("cat /p").unwrap();
         assert_eq!(toks[0].span, SourceSpan::new(0, 3)); // cat
-        assert_eq!(toks[1].span, SourceSpan::new(4, 7)); // /p
+        assert_eq!(toks[1].span, SourceSpan::new(4, 6)); // /p
         assert_eq!(toks[2].kind, TokenKind::Eof);
     }
 }
