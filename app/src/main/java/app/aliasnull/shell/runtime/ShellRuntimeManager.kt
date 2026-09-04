@@ -112,4 +112,25 @@ interface ShellRuntimeManager {
      * answer - no JNI leaks to callers.
      */
     fun backendAvailability(backend: ExecutionBackend): ExecutionBackendAvailability
+
+    /**
+     * Runs exactly one authorized native-process self-check case (Part 27-Q) and
+     * returns the genuine structured outcome.
+     *
+     * This is the app-facing controlled boundary over the native process runner.
+     * [case] is the only thing a caller chooses - never an executable, argv,
+     * cwd, environment or stdin. The underlying request is the single allowlisted
+     * invocation [NativeExecutionPolicy] authorizes for that case, so the policy
+     * gate always stays in front of the real runner and no UI code ever builds a
+     * raw request. This is NOT a Shell command surface: nothing routes an AN
+     * Shell command here and the runner remains disconnected from command
+     * routing.
+     *
+     * When the native runtime is not loaded and bootstrapped the case is not
+     * attempted and [NativeProcessTestResult.NotReady] is returned - execution is
+     * never forced on an unready runtime. The blocking native run happens off the
+     * caller's thread on the runtime's background dispatcher, so this suspend
+     * function is safe to call from the main thread.
+     */
+    suspend fun runNativeProcessTest(case: NativeProcessTestKind): NativeProcessTestResult
 }

@@ -69,14 +69,32 @@ sealed interface NativeExecutionPolicyDecision {
  */
 object NativeExecutionPolicy {
 
-    /** Executable used by the stdout self-check; resolves to the real toybox `echo`. */
-    const val SELFCHECK_STDOUT_TOKEN = "aliasnull-p27-selfcheck-stdout"
+    /**
+     * The single argument `echo` is allowlisted to print. The value doubles as
+     * the genuine message the Part 27-Q Echo self-check displays on stdout, so a
+     * real child actually echoes this exact text back to the app.
+     */
+    const val SELFCHECK_STDOUT_TOKEN = "AliasNull native runtime OK"
 
     /** Missing-file argument for the stderr self-check; toybox `cat` reports it on stderr. */
     const val SELFCHECK_STDERR_PATH = "/no/such/aliasnull-p27-selfcheck-stderr-file"
 
     /** Deterministic non-existent executable for the LAUNCH_FAILED self-check. */
     const val SELFCHECK_MISSING_BINARY = "/system/bin/aliasnull-p27-no-such-selfcheck-binary"
+
+    /**
+     * Canonical allowlisted invocations (Part 27-Q). Each is exactly one bare
+     * argv that [decide] permits; naming them lets an internal diagnostic select
+     * an authorized case without re-deriving argv lists and keeps [PERMITTED_ARGV]
+     * built from the same single source.
+     */
+    val ECHO_INVOCATION: List<String> = listOf("/system/bin/echo", SELFCHECK_STDOUT_TOKEN)
+
+    val STDERR_INVOCATION: List<String> = listOf("/system/bin/cat", SELFCHECK_STDERR_PATH)
+
+    val NON_ZERO_EXIT_INVOCATION: List<String> = listOf("/system/bin/false")
+
+    val LAUNCH_FAILURE_INVOCATION: List<String> = listOf(SELFCHECK_MISSING_BINARY)
 
     /**
      * Decides whether [process] may reach the native runner. Total: every request
@@ -134,16 +152,9 @@ object NativeExecutionPolicy {
     private fun display(argv: List<String>): String = argv.joinToString(" ")
 
     private val PERMITTED_ARGV: List<List<String>> = listOf(
-        // Genuine successful launch + stdout capture (exit 0).
-        listOf("/system/bin/echo", SELFCHECK_STDOUT_TOKEN),
-        // Genuine stderr capture and a real non-zero exit (toybox cat reports a
-        // missing file on stderr and exits 1; stdout must stay empty).
-        listOf("/system/bin/cat", SELFCHECK_STDERR_PATH),
-        // Real non-zero exit with no output.
-        listOf("/system/bin/false"),
-        // Explicit internal negative case, allowlisted so the native
-        // LAUNCH_FAILED path is reachable through the same seam. The path is
-        // fixed and never exists.
-        listOf(SELFCHECK_MISSING_BINARY),
+        ECHO_INVOCATION,
+        STDERR_INVOCATION,
+        NON_ZERO_EXIT_INVOCATION,
+        LAUNCH_FAILURE_INVOCATION,
     )
 }

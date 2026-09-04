@@ -8,6 +8,9 @@ import androidx.lifecycle.viewModelScope
 import app.aliasnull.shell.execution.ShellExecutionEvent
 import app.aliasnull.shell.execution.ShellExecutionRequest
 import app.aliasnull.shell.runtime.AliasNullRuntimeManager
+import app.aliasnull.shell.runtime.NativeProcessExecutionResult
+import app.aliasnull.shell.runtime.NativeProcessTestKind
+import app.aliasnull.shell.runtime.NativeProcessTestResult
 import app.aliasnull.shell.runtime.ShellBackendPhase
 import app.aliasnull.shell.runtime.ShellRuntimeManager
 import app.aliasnull.shell.terminal.TerminalInputOutcome
@@ -577,6 +580,65 @@ class ShellViewModel(application: Application) : AndroidViewModel(application) {
      * manufactured value. No-op when the gate is not FAILED or an attempt runs.
      */
     fun retryInitialize() = runtime.retryInitialize()
+
+    // ---- Part 27-Q native-process self-check (developer diagnostic) ----
+
+    /**
+     * Runs exactly one authorized native-process self-check [kind] through the
+     * runtime's controlled seam and publishes the genuine structured result on
+     * [ShellUiState.nativeProcessTest].
+     *
+     * This is a labeled developer diagnostic, not a Shell command: [kind] is the
+     * only choice a caller makes (the UI never builds a request, argv, cwd,
+     * environment or stdin), and the outcome is shown truthfully - NotReady when
+     * the native runtime is not loaded/bootstrapped, otherwise the seam's real
+     * category and whether the case's stated expectation was met. At most one
+     * case runs at a time: a call while one is already in flight is ignored, and
+     * the running case is cleared when the run completes. The native run happens
+     * off the main thread inside the runtime; a genuinely unexpected failure is
+     * surfaced as an [NativeProcessExecutionResult.InternalFailure] outcome,
+     * never thrown into the UI or silently dropped.
+     */
+    fun runNativeProcessTest(kind: NativeProcessTestKind) {
+        // One-at-a-time: ignore a request while a self-check is already in flight.
+        if (_uiState.value.nativeProcessTest.runningCase != null) return
+        _uiState.update { state ->
+            state.copy(
+                nativeProcessTest = state.nativeProcessTest.copy(runningCase = kind, result = null),
+            )
+        }
+        viewModelScope.launch {
+            val result = try {
+                runtime.runNativeProcessTest(kind)
+            } catch (cancelled: CancellationException) {
+                // ViewModel scope cleared or the run cancelled; not a test failure.
+                throw cancelled
+            } catch (t: Throwable) {
+                // The controlled seam itself failed outside its result model: never
+                // crash the screen, never leave the panel stuck at Running, and never
+                // fabricate a native outcome. Surface it as an internal failure.
+                NativeProcessTestResult.Outcome(
+                    kind = kind,
+                    execution = NativeProcessExecutionResult.InternalFailure(
+                        t.message ?: "unexpected failure while running the native process test",
+                    ),
+                    expectedMet = false,
+                )
+            }
+            _uiState.update { state ->
+                val test = state.nativeProcessTest
+                // The one-at-a-time guard means this run is still the one in flight
+                // unless the state was already replaced, so publish only then.
+                if (test.runningCase != kind) {
+                    state
+                } else {
+                    state.copy(
+                        nativeProcessTest = NativeProcessTestUiState(runningCase = null, result = result),
+                    )
+                }
+            }
+        }
+    }
 
     // ---- Internals ----
 

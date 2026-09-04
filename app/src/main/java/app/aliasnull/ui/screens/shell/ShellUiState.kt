@@ -1,6 +1,8 @@
 package app.aliasnull.ui.screens.shell
 
 import androidx.compose.ui.text.input.TextFieldValue
+import app.aliasnull.shell.runtime.NativeProcessTestKind
+import app.aliasnull.shell.runtime.NativeProcessTestResult
 import app.aliasnull.shell.runtime.ShellBackendState
 import app.aliasnull.shell.terminal.TerminalSessionId
 import app.aliasnull.shell.terminal.TerminalSessionState
@@ -83,6 +85,16 @@ data class ShellUiState(
      * verification attempt publishes a READY or FAILED gate.
      */
     val runtimeStatus: ShellBackendState = ShellBackendState.INITIALIZING,
+    /**
+     * The Part 27-Q controlled native-process self-check panel state: which (if
+     * any) single case is running right now and the last genuine structured
+     * result. Global (not per session) and deliberately UI-session-independent:
+     * this is a labeled developer diagnostic, never a Shell command surface and
+     * never routed through a session or the command executor. [runningCase]
+     * being non-null means one self-check is genuinely in flight (the guard for
+     * one-at-a-time); [result] is the last truthful [NativeProcessTestResult].
+     */
+    val nativeProcessTest: NativeProcessTestUiState = NativeProcessTestUiState(),
 ) {
     val activeSession: TerminalSession?
         get() = sessions.firstOrNull { it.id == activeSessionId }
@@ -91,3 +103,20 @@ data class ShellUiState(
         const val NO_SESSION = -1L
     }
 }
+
+/**
+ * The on-screen state of the Part 27-Q "Native Runtime Test" developer panel.
+ *
+ * Carries exactly two honest facts: which single self-check case is running
+ * right now ([runningCase], null when none is) and the last structured result
+ * ([result], null before any run completes). The UI derives its display from
+ * these - Idle when both are null, Running when [runningCase] is non-null, and
+ * otherwise the [result] rendered truthfully (Passed only when the case's stated
+ * expectation was genuinely met, NotReady surfaced as a readiness fact rather
+ * than a pass/fail). The UI never builds a request; the only choice is the
+ * [NativeProcessTestKind] passed to [ShellViewModel.runNativeProcessTest].
+ */
+data class NativeProcessTestUiState(
+    val runningCase: NativeProcessTestKind? = null,
+    val result: NativeProcessTestResult? = null,
+)

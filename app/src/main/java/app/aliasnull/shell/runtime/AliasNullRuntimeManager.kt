@@ -438,6 +438,35 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
         )
     }
 
+    /**
+     * Part 27-Q controlled native-process self-check. Never attempts execution
+     * unless the native runtime is genuinely loaded and bootstrapped; otherwise it
+     * returns [NativeProcessTestResult.NotReady] and no child is launched. The
+     * authorized request comes from [NativeProcessTestKind.request] (built from the
+     * policy's canonical invocations) and runs through [NativeProcessExecutionSeam]
+     * on the background dispatcher - this is the only place the diagnostic reaches
+     * the real runner, so [NativeExecutionPolicy] stays authoritative.
+     */
+    override suspend fun runNativeProcessTest(case: NativeProcessTestKind): NativeProcessTestResult {
+        if (!nativeRuntime.isNativeLibraryLoaded || !nativeRuntime.isNativeBootstrapActive) {
+            return NativeProcessTestResult.NotReady(
+                kind = case,
+                message = notReadyReason(),
+            )
+        }
+        val execution = NativeProcessExecutionSeam.execute(case.request(), nativeRuntime, Dispatchers.Default)
+        val expectedMet = execution is NativeProcessExecutionResult.Executed && case.matches(execution.result)
+        return NativeProcessTestResult.Outcome(case, execution, expectedMet)
+    }
+
+    /** Plain-language reason the native runtime cannot run a self-check process yet. */
+    private fun notReadyReason(): String {
+        val loaded = nativeRuntime.isNativeLibraryLoaded
+        val bootstrapped = nativeRuntime.isNativeBootstrapActive
+        return "The native runtime is not ready (library ${if (loaded) "loaded" else "not loaded"}, " +
+            "bootstrap ${if (bootstrapped) "active" else "not active"}); no controlled native process was run."
+    }
+
     private companion object {
         const val TAG = "AliasNullRuntimeManager"
 

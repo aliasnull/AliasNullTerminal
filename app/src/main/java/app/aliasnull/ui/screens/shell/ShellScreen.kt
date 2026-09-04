@@ -166,6 +166,11 @@ fun ShellScreen(
                         onOpenSessions = { scope.launch { drawerState.open() } },
                         onShowKeyboard = focusTerminalInput,
                     )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    NativeProcessTestPanel(
+                        state = state.nativeProcessTest,
+                        onRun = viewModel::runNativeProcessTest,
+                    )
                 }
             }
         }
