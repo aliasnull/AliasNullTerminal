@@ -1,6 +1,9 @@
 package app.aliasnull.shell.runtime
 
 import app.aliasnull.shell.bootstrap.BaseUserspaceFiles
+import app.aliasnull.shell.runtime.native.AliasNullNativeRuntime
+import app.aliasnull.shell.runtime.native.NativeProcessOutcome
+import app.aliasnull.shell.runtime.native.NativeProcessResult
 import java.io.File
 
 /**
@@ -32,6 +35,89 @@ internal object BaseExecutableFailureDiagnostics {
         lines += "file context: " + readSelinuxContext(executable)
         lines += "mount: " + containingMount(path)
         return lines
+    }
+
+    /**
+     * TEMPORARY Part 27-S2-PERM-FIX system-linker probe: runs the verified
+     * installed [executable] through /system/bin/linker64 instead of exec'ing it
+     * directly and classifies the outcome so the on-device cause can be read:
+     * A (linker64 itself could not be executed), B (linker started but could not
+     * load/run the target), C (target executed successfully), D (target exited
+     * non-zero), or E (internal setup failure). Total - never throws. Removed
+     * with the probe once the correct execution model is decided.
+     */
+    suspend fun probeViaSystemLinker(
+        runner: AliasNullNativeRuntime,
+        executable: File,
+    ): List<String> {
+        val result = try {
+            NativeProcessExecutionSeam.executeBaseExecutableViaLinkerProbe(runner, executable)
+        } catch (error: Throwable) {
+            return listOf(
+                "--- system-linker probe (TEMPORARY) ---",
+                "E: the system-linker probe could not run: ${error.message ?: error::class.simpleName}",
+            )
+        }
+        return listOf(
+            "--- system-linker probe (TEMPORARY) ---",
+            "probe argv: ${NativeExecutionPolicy.LINKER64_PATH} <verified installed base executable>",
+            "probe success is: exit 0, stdout '${NativeExecutionPolicy.BASE_USERSPACE_STDOUT_TOKEN}', empty stderr",
+        ) + classifyProbe(result)
+    }
+
+    private fun classifyProbe(result: NativeProcessExecutionResult): List<String> = when (result) {
+        is NativeProcessExecutionResult.Rejected ->
+            listOf("E: internal setup failure - the linker-launch request was rejected by policy: ${result.reason.message}")
+        is NativeProcessExecutionResult.RunnerUnavailable ->
+            listOf("E: native runner unavailable: ${result.message}")
+        is NativeProcessExecutionResult.InternalFailure ->
+            listOf("E: internal failure: ${result.message}")
+        is NativeProcessExecutionResult.Executed -> classifyNativeProbe(result.result)
+    }
+
+    private fun classifyNativeProbe(result: NativeProcessResult): List<String> = when (result.outcome) {
+        NativeProcessOutcome.LAUNCH_FAILED ->
+            listOf("A: linker64 itself could not be executed - ${result.errorMessage ?: "unknown exec error"}")
+        NativeProcessOutcome.INTERNAL_ERROR ->
+            listOf("E: native runner internal error - ${result.errorMessage ?: "unknown"}")
+        NativeProcessOutcome.RUNNER_UNAVAILABLE ->
+            listOf("E: native runner unavailable - ${result.errorMessage ?: "unknown"}")
+        NativeProcessOutcome.TERMINATED_BY_SIGNAL -> buildList {
+            add(
+                "B: linker started but was terminated by signal ${result.termSignal ?: "?"}; " +
+                    "the target did not reach a clean exit-0",
+            )
+            addAll(rawResultLines(result))
+        }
+        NativeProcessOutcome.EXITED -> buildList {
+            val cleanOk = result.exitCode == 0 &&
+                result.stdout.trimEnd() == NativeExecutionPolicy.BASE_USERSPACE_STDOUT_TOKEN &&
+                result.stderr.trimEnd().isEmpty()
+            when {
+                cleanOk ->
+                    add("C: target ELF executed successfully (exit 0, expected token on stdout, empty stderr)")
+                result.exitCode == 0 ->
+                    add("D?: target exited 0 but stdout/stderr did not match the expected token")
+                result.stderr.isNotBlank() ->
+                    add(
+                        "B: linker started but could not load/run the target cleanly " +
+                            "(exit ${result.exitCode}; stderr present below)",
+                    )
+                else ->
+                    add("D: the started process exited ${result.exitCode} with empty stderr")
+            }
+            addAll(rawResultLines(result))
+        }
+    }
+
+    private fun rawResultLines(result: NativeProcessResult): List<String> {
+        val stdout = result.stdout.trimEnd()
+        val stderr = result.stderr.trimEnd()
+        return listOf(
+            "exit: ${result.exitCode ?: "?"}",
+            "stdout: " + if (stdout.isEmpty()) "(empty)" else stdout,
+            "stderr: " + if (stderr.isEmpty()) "(empty)" else stderr,
+        )
     }
 
     /** Renders the file type plus the nine permission bits and per-class exec flags. */

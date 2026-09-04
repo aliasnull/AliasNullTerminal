@@ -634,10 +634,12 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
             // access(X_OK) passed yet the child execve() returned EACCES. Capture
             // the real on-device facts (mode bits, SELinux process/file contexts,
             // containing mount) so noexec vs execute_no_trans vs stale install can
-            // be told apart. Removed once the true cause is fixed.
+            // be told apart, and run the system-linker probe to test the alternate
+            // legitimate launch model. All removed once the true cause is fixed.
             val installedRoot = baseUserspace.installedUserspaceRoot
             val executable = File(installedRoot, BaseUserspaceArtifact.EXECUTABLE_FILE)
-            val lines = BaseExecutableFailureDiagnostics.capture(executable)
+            val lines = BaseExecutableFailureDiagnostics.capture(executable).toMutableList()
+            lines += BaseExecutableFailureDiagnostics.probeViaSystemLinker(nativeRuntime, executable)
             lines.forEach { Log.w(TAG, it) }
             lines
         } else {

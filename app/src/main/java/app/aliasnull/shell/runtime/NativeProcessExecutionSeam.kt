@@ -79,6 +79,42 @@ object NativeProcessExecutionSeam {
         } else {
             NativeExecutionPolicy.decide(process)
         }
+        return executeGated(process, runner, decision)
+    }
+
+    /**
+     * TEMPORARY Part 27-S2-PERM-FIX: runs the verified installed base executable
+     * through the system dynamic linker instead of exec'ing it directly:
+     *   execve("/system/bin/linker64", ["/system/bin/linker64", <verified path>])
+     * The request is pinned by [NativeExecutionPolicy.decideBaseExecutableViaLinkerProbe]
+     * to exactly that argv (no other path, argument, working directory,
+     * environment or stdin), so no arbitrary linker invocation is possible. This
+     * is a developer diagnostic to decide the correct execution model; it is
+     * removed with the probe and is never used as an on-failure fallback.
+     */
+    suspend fun executeBaseExecutableViaLinkerProbe(
+        runner: AliasNullNativeRuntime,
+        installedBaseExecutable: File,
+        dispatcher: CoroutineDispatcher = Dispatchers.Default,
+    ): NativeProcessExecutionResult {
+        val process = NativeProcessRequest(
+            argv = listOf(NativeExecutionPolicy.LINKER64_PATH, installedBaseExecutable.absolutePath),
+        )
+        val decision = NativeExecutionPolicy.decideBaseExecutableViaLinkerProbe(process, installedBaseExecutable)
+        return withContext(dispatcher) { executeGated(process, runner, decision) }
+    }
+
+    /**
+     * Executes [process] under a caller-supplied [decision] with the same
+     * outcome mapping as [executeBlocking]: a Rejected decision returns Rejected
+     * without launching; otherwise the real runner runs and its outcome is
+     * wrapped truthfully. Off-main only.
+     */
+    private fun executeGated(
+        process: NativeProcessRequest,
+        runner: AliasNullNativeRuntime,
+        decision: NativeExecutionPolicyDecision,
+    ): NativeProcessExecutionResult {
         if (decision is NativeExecutionPolicyDecision.Rejected) {
             return NativeProcessExecutionResult.Rejected(decision.reason)
         }

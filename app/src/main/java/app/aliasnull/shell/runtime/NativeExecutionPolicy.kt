@@ -172,6 +172,51 @@ object NativeExecutionPolicy {
         return NativeExecutionPolicyDecision.Allowed
     }
 
+    // ---- TEMPORARY Part 27-S2-PERM-FIX: system-linker launch probe ----
+    // The bundled base executable's direct execve() returns EACCES on the
+    // developer device even though its mode, mount, SELinux label and categories
+    // are all exec-correct (the parent access(X_OK) passes, the child execve
+    // fails). A temporary probe therefore tests the alternate legitimate model of
+    // launching the ELF through the system dynamic linker instead of exec'ing it:
+    //   execve("/system/bin/linker64", ["/system/bin/linker64", <verified path>])
+    // This allowance is DEV-ONLY: argv[1] is pinned to the exact verified
+    // installed base executable and no other path, argument, working directory,
+    // environment or stdin is permitted. LINKER64_PATH and
+    // decideBaseExecutableViaLinkerProbe are removed together with the probe once
+    // the correct execution model is decided.
+    const val LINKER64_PATH = "/system/bin/linker64"
+
+    fun decideBaseExecutableViaLinkerProbe(
+        process: NativeProcessRequest,
+        installedBaseExecutable: File,
+    ): NativeExecutionPolicyDecision {
+        if (installedBaseExecutable.name != BaseUserspaceArtifact.EXECUTABLE_FILE) {
+            return rejected(
+                NativeExecutionRejectionCode.EXECUTABLE_NOT_PERMITTED,
+                "The linker-launch probe target must be the bundled " +
+                    "'${BaseUserspaceArtifact.EXECUTABLE_FILE}', not '${installedBaseExecutable.name}'.",
+            )
+        }
+        val expected = listOf(LINKER64_PATH, installedBaseExecutable.absolutePath)
+        if (process.argv != expected) {
+            return rejected(
+                NativeExecutionRejectionCode.EXECUTABLE_NOT_PERMITTED,
+                "The linker-launch probe may run only $LINKER64_PATH with the exact verified " +
+                    "base executable as its single argument; got '${display(process.argv)}'.",
+            )
+        }
+        if (process.workingDirectory != null || process.environment.isNotEmpty() ||
+            process.stdinBytes != null
+        ) {
+            return rejected(
+                NativeExecutionRejectionCode.ARGUMENTS_NOT_PERMITTED,
+                "The linker-launch probe must run as a bare argv; " +
+                    "no working directory, environment or stdin is permitted.",
+            )
+        }
+        return NativeExecutionPolicyDecision.Allowed
+    }
+
     /**
      * Decides whether [process] may reach the native runner. Total: every request
      * yields [Allowed] or [Rejected], never a throw.
