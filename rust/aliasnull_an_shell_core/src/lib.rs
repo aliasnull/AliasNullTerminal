@@ -1,12 +1,14 @@
 //! AliasNull AN Shell core (Rust).
 //!
 //! Part 27-B established this crate as a real, buildable Android ARM64 cdylib
-//! dependency of the app. Part 27-C adds the first genuine language-core
-//! foundation: a minimal AN Shell source-input model (byte-offset spans) and a
-//! small deterministic lexer that turns source text into a token stream.
+//! dependency of the app. Part 27-C added the source-input model (byte-offset
+//! spans) and a small deterministic lexer. Part 27-D adds the first syntax
+//! layer on top: a parser that turns the lexer's token stream into a minimal
+//! AN Shell AST.
 //!
 //! This is language-core only. It is NOT a shell, NOT a command executor, NOT
-//! a parser, and it is not connected to the Android command system in any way:
+//! a parser/executor hybrid, and it is not connected to the Android command
+//! system in any way:
 //!
 //! * it does not execute commands, spawn processes, open a PTY or touch JNI;
 //! * it is not ShellCommandExecutor, ExecutionRouter, TerminalSessionEngine or
@@ -18,13 +20,19 @@
 //!
 //! * source: SourceText (owning input) and byte-offset SourceSpan;
 //! * token:  the minimal TokenKind / Token vocabulary;
-//! * lexer:  lex(), turning a SourceText into `Result<Vec<Token>, LexerError>`.
+//! * lexer:  lex(), turning a SourceText into `Result<Vec<Token>, LexerError>`;
+//! * ast:    the minimal Program / Command / Argument syntax AST;
+//! * parser: parse(), turning a `&[Token]` into `Result<Program, ParseError>`.
 
+mod ast;
 mod lexer;
+mod parser;
 mod source;
 mod token;
 
+pub use ast::{Argument, Command, Program};
 pub use lexer::{lex, LexerError};
+pub use parser::{parse, ParseError, ParseErrorKind};
 pub use source::{SourceSpan, SourceText};
 pub use token::{Token, TokenKind};
 
