@@ -146,9 +146,8 @@ object AnShellCoreBridge {
         }
         val payload = AnShellCoreNativeBridge.executeCommandBytes(command.toByteArray(Charsets.UTF_8))
         if (payload == null) {
-            return AnShellCoreExecutionResult.pipelineError(
-                kind = AnShellCoreResultKind.INTERNAL_ERROR,
-                message = "The native core could not produce a result payload for this command.",
+            return AnShellCoreExecutionResult.internalError(
+                "The native core could not produce a result payload for this command.",
             )
         }
         return AnShellCorePayloadCodec.decode(payload)

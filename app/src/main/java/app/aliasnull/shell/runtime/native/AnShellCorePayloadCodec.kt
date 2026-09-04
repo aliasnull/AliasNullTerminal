@@ -15,19 +15,29 @@ package app.aliasnull.shell.runtime.native
  * byte 1            clear_requested (0/1; meaningful only on success)
  * u32               output unit count N (0 for errors)
  * N * (u32 len + UTF-8 bytes)     the output units, in order
- * [error kinds 1..4 only]
- *   u32             message byte length
- *   message bytes   (UTF-8)
+ *
+ * [language error kinds 1..3 only]
+ *   u8              error category (see the CATEGORY_* mapping in this file)
+ *   u8              has_subject (0/1)
+ *   if has_subject: u32 subject byte length + UTF-8 bytes
+ *   u32             user_message byte length + UTF-8 bytes
+ *   u32             diagnostic byte length + UTF-8 bytes
  *   u8              has_span (0/1)
  *   if has_span: u32 span_start, u32 span_end   ([start, end) byte offsets)
+ *
+ * [internal error kind 4 only]
+ *   u32             message byte length + UTF-8 bytes
+ *   u8              has_span (0/1)     (always 0)
  * ```
  *
  * Every field is length-prefixed, never delimiter-split, so arbitrary echo text
  * (embedded newlines, quotes, non-ASCII) round-trips without ambiguity. Decoding
  * is total: a frame that violates the layout (truncated, oversized lengths,
- * unknown kind byte) is reported as a structured
- * [AnShellCoreResultKind.INTERNAL_ERROR] instead of throwing, so a caller always
- * receives a value.
+ * unknown kind byte, a category that contradicts its kind byte) is reported as a
+ * structured [AnShellCoreResultKind.INTERNAL_ERROR] instead of throwing, so a
+ * caller always receives a value. This decoder never parses Rust error text: it
+ * only reads the length-prefixed fields and enforces the structural mapping
+ * between the kind byte and the category byte.
  */
 internal object AnShellCorePayloadCodec {
 
@@ -36,6 +46,14 @@ internal object AnShellCorePayloadCodec {
     private const val KIND_PARSE_ERROR = 2
     private const val KIND_SEMANTIC_ERROR = 3
     private const val KIND_INTERNAL_ERROR = 4
+
+    // Category codes mirroring the Rust bridge constants; only these values may
+    // ride on language error kinds 1..3.
+    private const val CATEGORY_LEXER_UNTERMINATED_STRING = 1
+    private const val CATEGORY_PARSE_MISSING_EOF = 2
+    private const val CATEGORY_PARSE_TOKEN_AFTER_EOF = 3
+    private const val CATEGORY_SEMANTIC_UNKNOWN_COMMAND = 4
+    private const val CATEGORY_SEMANTIC_EMPTY_COMMAND = 5
 
     /** Decodes a native payload frame; never throws. */
     fun decode(payload: ByteArray): AnShellCoreExecutionResult {
@@ -49,20 +67,45 @@ internal object AnShellCorePayloadCodec {
 
         return when (kindByte) {
             KIND_SUCCESS -> AnShellCoreExecutionResult.success(output, clearRequested == 1)
-            KIND_LEXER_ERROR, KIND_PARSE_ERROR, KIND_SEMANTIC_ERROR, KIND_INTERNAL_ERROR ->
-                decodeError(reader, kindByte)
+            KIND_LEXER_ERROR, KIND_PARSE_ERROR, KIND_SEMANTIC_ERROR ->
+                decodeLanguageError(reader, kindByte)
+            KIND_INTERNAL_ERROR ->
+                decodeInternalError(reader)
             else -> internalError("The native payload kind byte $kindByte is unknown.")
         }
     }
 
-    /** Reads the message and optional span every native error frame carries. */
-    private fun decodeError(reader: Reader, kindByte: Int): AnShellCoreExecutionResult {
-        val message = reader.readUtf8String() ?: return internalError("The native payload has a malformed error message.")
+    /** Reads a language-error frame (kinds 1..3). */
+    private fun decodeLanguageError(reader: Reader, kindByte: Int): AnShellCoreExecutionResult {
+        val categoryByte = reader.readU8() ?: return internalError("The native payload has a malformed error category.")
+        val category = categoryOf(categoryByte)
+            ?: return internalError("The native payload error category $categoryByte is unknown.")
+        val expectedKind = kindOfCategory(category)
+        val kind = when (kindByte) {
+            KIND_LEXER_ERROR -> AnShellCoreResultKind.LEXER_ERROR
+            KIND_PARSE_ERROR -> AnShellCoreResultKind.PARSE_ERROR
+            else -> AnShellCoreResultKind.SEMANTIC_ERROR
+        }
+        if (kind != expectedKind) {
+            return internalError(
+                "The native payload pairs category $categoryByte with an inconsistent kind byte $kindByte.",
+            )
+        }
+
+        val hasSubject = reader.readU8() ?: return internalError("The native payload is truncated inside its error subject.")
+        val subject = when (hasSubject) {
+            0 -> null
+            1 -> reader.readUtf8String() ?: return internalError("The native payload has a malformed error subject.")
+            else -> return internalError("The native payload has an invalid error-subject flag.")
+        }
+        val userMessage = reader.readUtf8String() ?: return internalError("The native payload has a malformed error user message.")
+        val diagnostic = reader.readUtf8String() ?: return internalError("The native payload has a malformed error diagnostic.")
+
         val hasSpan = reader.readU8() ?: return internalError("The native payload is truncated inside its error section.")
         var spanStart: Int? = null
         var spanEnd: Int? = null
         when (hasSpan) {
-            0 -> Unit // no span (internal errors never carry one)
+            0 -> Unit
             1 -> {
                 val start = reader.readU32() ?: return internalError("The native payload is truncated inside its error span.")
                 val end = reader.readU32() ?: return internalError("The native payload is truncated inside its error span.")
@@ -74,25 +117,50 @@ internal object AnShellCorePayloadCodec {
             }
             else -> return internalError("The native payload has an invalid error-span flag.")
         }
-        val kind = when (kindByte) {
-            KIND_LEXER_ERROR -> AnShellCoreResultKind.LEXER_ERROR
-            KIND_PARSE_ERROR -> AnShellCoreResultKind.PARSE_ERROR
-            KIND_SEMANTIC_ERROR -> AnShellCoreResultKind.SEMANTIC_ERROR
-            else -> AnShellCoreResultKind.INTERNAL_ERROR
-        }
-        return AnShellCoreExecutionResult.pipelineError(
+
+        return AnShellCoreExecutionResult.languageError(
             kind = kind,
-            message = message,
-            errorSpanStart = spanStart,
-            errorSpanEnd = spanEnd,
+            category = category,
+            userMessage = userMessage,
+            diagnostic = diagnostic,
+            subject = subject,
+            spanStart = spanStart,
+            spanEnd = spanEnd,
         )
     }
 
+    /** Reads an internal-error frame (kind 4): one message, never a span. */
+    private fun decodeInternalError(reader: Reader): AnShellCoreExecutionResult {
+        val message = reader.readUtf8String() ?: return internalError("The native payload has a malformed internal error message.")
+        val hasSpan = reader.readU8() ?: return internalError("The native payload is truncated inside its error section.")
+        return if (hasSpan == 0) {
+            AnShellCoreExecutionResult.internalError(message)
+        } else {
+            internalError("The native payload claims a span on an internal error.")
+        }
+    }
+
+    /** Maps a category byte to its enum, or null when the value is not a known category. */
+    private fun categoryOf(byte: Int): AnShellCoreErrorCategory? = when (byte) {
+        CATEGORY_LEXER_UNTERMINATED_STRING -> AnShellCoreErrorCategory.LEXER_UNTERMINATED_STRING
+        CATEGORY_PARSE_MISSING_EOF -> AnShellCoreErrorCategory.PARSE_MISSING_EOF
+        CATEGORY_PARSE_TOKEN_AFTER_EOF -> AnShellCoreErrorCategory.PARSE_TOKEN_AFTER_EOF
+        CATEGORY_SEMANTIC_UNKNOWN_COMMAND -> AnShellCoreErrorCategory.SEMANTIC_UNKNOWN_COMMAND
+        CATEGORY_SEMANTIC_EMPTY_COMMAND -> AnShellCoreErrorCategory.SEMANTIC_EMPTY_COMMAND
+        else -> null
+    }
+
+    /** The kind a language category must ride on; used for structural validation. */
+    private fun kindOfCategory(category: AnShellCoreErrorCategory): AnShellCoreResultKind = when (category) {
+        AnShellCoreErrorCategory.LEXER_UNTERMINATED_STRING -> AnShellCoreResultKind.LEXER_ERROR
+        AnShellCoreErrorCategory.PARSE_MISSING_EOF,
+        AnShellCoreErrorCategory.PARSE_TOKEN_AFTER_EOF -> AnShellCoreResultKind.PARSE_ERROR
+        AnShellCoreErrorCategory.SEMANTIC_UNKNOWN_COMMAND,
+        AnShellCoreErrorCategory.SEMANTIC_EMPTY_COMMAND -> AnShellCoreResultKind.SEMANTIC_ERROR
+    }
+
     private fun internalError(message: String): AnShellCoreExecutionResult =
-        AnShellCoreExecutionResult.pipelineError(
-            kind = AnShellCoreResultKind.INTERNAL_ERROR,
-            message = message,
-        )
+        AnShellCoreExecutionResult.internalError(message)
 
     /** Bounds-checked reader over the frame bytes. Never indexes out of range. */
     private class Reader(private val bytes: ByteArray) {

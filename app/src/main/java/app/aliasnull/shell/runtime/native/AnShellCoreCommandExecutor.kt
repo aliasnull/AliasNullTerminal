@@ -1,5 +1,6 @@
 package app.aliasnull.shell.runtime.native
 
+import android.util.Log
 import app.aliasnull.shell.execution.ShellCommandExecutor
 import app.aliasnull.shell.execution.ShellExecutionEvent
 import app.aliasnull.shell.execution.ShellExecutionRequest
@@ -48,14 +49,27 @@ import kotlinx.coroutines.withContext
  *     a clear that *preceded* later output in a multi-line submission hides that
  *     output, exactly because the ordering was already merged upstream. This is
  *     the honest rendering of the aggregate, not a redesign of the wire result.
- *   - the language-pipeline rejections [AnShellCoreResultKind.SEMANTIC_ERROR],
- *     [AnShellCoreResultKind.LEXER_ERROR] and [AnShellCoreResultKind.PARSE_ERROR]
- *     are command results: Started, then an [ShellExecutionEvent.Error] carrying
- *     the core's own message, then [ShellExecutionEvent.Completed] with exit
- *     code 1. For a semantic (unknown-command) rejection the executor also emits
- *     the same "Type 'help' ..." hint line the reference executor shows, so the
- *     unknown-command experience keeps behavioural parity while the wording stays
- *     the core's own authoritative text.
+ *   - the language-pipeline rejections [AnShellCoreResultKind.LEXER_ERROR],
+ *     [AnShellCoreResultKind.PARSE_ERROR] and
+ *     [AnShellCoreResultKind.SEMANTIC_ERROR] are command results: Started, then
+ *     an [ShellExecutionEvent.Error] whose text is `"AN Shell: "` plus the core's
+ *     own concise [AnShellCoreError.userMessage], then
+ *     [ShellExecutionEvent.Completed] with exit code 1. The product prefix is the
+ *     only text Kotlin adds: the wording itself is the core's authoritative,
+ *     user-safe message (no byte offsets, never the internal diagnostic).
+ *
+ *     Only for the unknown-command category
+ *     ([AnShellCoreErrorCategory.SEMANTIC_UNKNOWN_COMMAND]) does the executor
+ *     also emit the same "Type 'help' ..." hint line the reference executor
+ *     shows, so the unknown-command experience keeps behavioural parity while the
+ *     wording stays the core's own authoritative text. Every other category is
+ *     rendered without a hint, because the hint is a property of that one
+ *     semantic rule -- not of message text -- and Kotlin does not parse text to
+ *     decide it.
+ *
+ *     The rich [AnShellCoreError.diagnostic] (which may carry byte offsets) is
+ *     never shown to the user; it is logged at debug level so the internal detail
+ *     survives in logcat without leaking into the shell.
  *   - [AnShellCoreResultKind.INTERNAL_ERROR] and
  *     [AnShellCoreResultKind.BRIDGE_UNAVAILABLE] mean the language pipeline
  *     itself could not produce a command result (malformed payload, null JNI
@@ -100,15 +114,22 @@ class AnShellCoreCommandExecutor : ShellCommandExecutor {
                 }
                 emit(ShellExecutionEvent.Completed())
             }
-            AnShellCoreResultKind.SEMANTIC_ERROR -> {
-                emit(ShellExecutionEvent.Error(messageOf(result)))
-                emit(ShellExecutionEvent.Output("Type 'help' to view available frontend commands."))
-                emit(ShellExecutionEvent.Completed(exitCode = 1))
-            }
             AnShellCoreResultKind.LEXER_ERROR,
-            AnShellCoreResultKind.PARSE_ERROR -> {
-                emit(ShellExecutionEvent.Error(messageOf(result)))
+            AnShellCoreResultKind.PARSE_ERROR,
+            AnShellCoreResultKind.SEMANTIC_ERROR -> {
+                val error = result.error
+                emit(ShellExecutionEvent.Error("AN Shell: ${messageOf(result)}"))
+
+                if (error?.category == AnShellCoreErrorCategory.SEMANTIC_UNKNOWN_COMMAND) {
+                    emit(ShellExecutionEvent.Output("Type 'help' to view available frontend commands."))
+                }
                 emit(ShellExecutionEvent.Completed(exitCode = 1))
+
+                if (error?.diagnostic != null) {
+                    Log.d(TAG, "AN Shell core language error for \"$command\": " +
+                        "category=${error.category}, subject=${error.subject}, " +
+                        "span=[${error.spanStart},${error.spanEnd}), diagnostic=${error.diagnostic}")
+                }
             }
             AnShellCoreResultKind.INTERNAL_ERROR,
             AnShellCoreResultKind.BRIDGE_UNAVAILABLE -> {
@@ -119,5 +140,9 @@ class AnShellCoreCommandExecutor : ShellCommandExecutor {
 
     /** The core's own user-safe message, with a fallback that should never fire. */
     private fun messageOf(result: AnShellCoreExecutionResult): String =
-        result.errorMessage ?: "The AN Shell core reported an error without a message."
+        result.error?.userMessage ?: "The AN Shell core reported an error without a message."
+
+    private companion object {
+        const val TAG = "AnShellCoreCommandExecutor"
+    }
 }

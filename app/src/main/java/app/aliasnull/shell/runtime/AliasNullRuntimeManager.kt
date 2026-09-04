@@ -13,7 +13,6 @@ import app.aliasnull.shell.runtime.native.AnShellCoreBridgeState
 import app.aliasnull.shell.runtime.native.AnShellCoreBridgeStatus
 import app.aliasnull.shell.runtime.native.AnShellCoreCommandExecutor
 import app.aliasnull.shell.runtime.native.AnShellCoreExecutionResult
-import app.aliasnull.shell.runtime.native.AnShellCoreResultKind
 import app.aliasnull.shell.runtime.native.NativeRuntimeResult
 import app.aliasnull.shell.runtime.native.NativeSessionOutcome
 import app.aliasnull.shell.runtime.native.NativeSessionResult
@@ -321,9 +320,8 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
         val probeResults = AN_SHELL_CORE_PROBES.map { probe ->
             runCatching { AnShellCoreBridge.execute(probe) }
                 .getOrElse { error ->
-                    AnShellCoreExecutionResult.pipelineError(
-                        kind = AnShellCoreResultKind.INTERNAL_ERROR,
-                        message = "AN Shell core probe threw unexpectedly: ${error.message ?: error::class.simpleName}",
+                    AnShellCoreExecutionResult.internalError(
+                        "AN Shell core probe threw unexpectedly: ${error.message ?: error::class.simpleName}",
                     )
                 }
         }
@@ -336,8 +334,8 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
         for ((probe, result) in AN_SHELL_CORE_PROBES.zip(probeResults)) {
             summary.append(" [").append(displayProbe(probe)).append(" -> ")
                 .append(result.kind).append(" outputs=").append(result.output.size)
-            if (result.errorMessage != null) {
-                summary.append(" error=").append(result.errorMessage)
+            if (result.error != null) {
+                summary.append(" error=").append(result.error.userMessage)
             }
             summary.append(']')
         }
