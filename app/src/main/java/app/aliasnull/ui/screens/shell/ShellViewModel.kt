@@ -9,6 +9,8 @@ import app.aliasnull.shell.execution.ShellExecutionEvent
 import app.aliasnull.shell.execution.ShellExecutionRequest
 import app.aliasnull.shell.runtime.AliasNullRuntimeManager
 import app.aliasnull.shell.runtime.ShellRuntimeManager
+import app.aliasnull.shell.terminal.TerminalSessionId
+import app.aliasnull.shell.terminal.TerminalSessionOutcome
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -36,6 +38,14 @@ import kotlinx.coroutines.launch
  * session, this ViewModel is where that optional association would be bridged from
  * the runtime's engine boundary - never fabricated. Runtime shutdown remains the
  * single engine cleanup authority (ShellRuntimeManager.terminalSessionEngine).
+ *
+ * Part 26-O wires that reconciliation into the UI lifecycle: creating a UI session
+ * requests an engine session through [ShellRuntimeManager.terminalSessionOrchestrator]
+ * (see [createSession]), and closing a UI session that holds a genuine engine
+ * association releases it through the same boundary (see [closeSession]). The
+ * request is synchronous and the current engine backend is unavailable, so the
+ * honest outcome is ENGINE_UNAVAILABLE and every session keeps engineSessionId ==
+ * null; the UI session always exists normally regardless of the engine result.
  *
  * Command execution is delegated to the runtime's [ShellCommandExecutor] (see
  * [ShellRuntimeManager]); this ViewModel never parses or simulates commands
@@ -78,15 +88,48 @@ class ShellViewModel(application: Application) : AndroidViewModel(application) {
 
     // ---- Session management ----
 
-    /** Creates a new session, assigns it a dynamic title, and activates it. */
+    /**
+     * Creates a new session, assigns it a dynamic title, and activates it.
+     *
+     * The normal UI session is created first, then it requests an engine session
+     * through the runtime orchestration boundary ([ShellRuntimeManager.terminalSessionOrchestrator])
+     * using this session's raw [Long] id. Only a genuine SESSION_OPENED result
+     * attaches a real [TerminalSessionId] to the session; any other outcome keeps
+     * [TerminalSession.engineSessionId] null and never fabricates an id. The
+     * current engine backend is unavailable, so every new session stays unattached
+     * and still exists normally.
+     */
     fun createSession() {
         val id = nextSessionId++
         val title = nextSessionTitle()
+        val base = TerminalSession(id = id, title = title, entries = banner())
+        val engineId = requestEngineSession(id)
+        val session = if (engineId == null) base else base.copy(engineSessionId = engineId)
         _uiState.update { state ->
             state.copy(
-                sessions = state.sessions + TerminalSession(id = id, title = title, entries = banner()),
+                sessions = state.sessions + session,
                 activeSessionId = id,
             )
+        }
+    }
+
+    /**
+     * Requests an engine session for the UI session [uiSessionId] through the
+     * runtime orchestration boundary and returns a genuine engine session id only
+     * when the engine reports SESSION_OPENED with a real (non-NO_SESSION) id.
+     * Any other outcome - today ENGINE_UNAVAILABLE - returns null so the UI
+     * session stays unattached. This ViewModel never converts [uiSessionId] into a
+     * [TerminalSessionId] and never fabricates one.
+     */
+    private fun requestEngineSession(uiSessionId: Long): TerminalSessionId? {
+        val result = runtime.terminalSessionOrchestrator.requestSessionForUiSession(uiSessionId)
+        return if (
+            result.outcome == TerminalSessionOutcome.SESSION_OPENED &&
+            result.sessionId != TerminalSessionId.NO_SESSION
+        ) {
+            result.sessionId
+        } else {
+            null
         }
     }
 
@@ -104,17 +147,28 @@ class ShellViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * Closes the session with [id]; refuses to remove the last remaining session.
      *
-     * UI sessions today carry no engine association (see [TerminalSession.engineSessionId]),
-     * so nothing engine-side is closed here. Should a future backend associate an
-     * engine session, releasing it is the engine owner's responsibility at the
-     * runtime boundary, not this ViewModel's, and never a fabricated engine close.
+     * Any in-flight UI execution is cancelled first. A closing session releases an
+     * engine association only when it holds a genuine one: a non-null
+     * [TerminalSession.engineSessionId] is delegated to the runtime orchestration
+     * boundary ([ShellRuntimeManager.terminalSessionOrchestrator]), whose engine
+     * close is idempotent for unknown/already-closed ids. Today every UI session
+     * has a null association, so no engine close is requested here and no fake id
+     * is ever fabricated - a UI session with no engine session closes without an
+     * engine call.
      */
     fun closeSession(id: Long) {
-        // Cancel any in-flight execution before removing the session so its event
-        // stream cannot keep running after the session disappears.
         val snapshot = _uiState.value
-        if (snapshot.sessions.size > 1 && snapshot.sessions.any { it.id == id }) {
+        val willRemove = snapshot.sessions.size > 1 && snapshot.sessions.any { it.id == id }
+        if (willRemove) {
+            // Cancel any in-flight execution before removing the session so its event
+            // stream cannot keep running after the session disappears.
             executionJobs.remove(id)?.cancel()
+            // Release a genuine engine association through the orchestration
+            // boundary. engineSessionId is null today, so this never fires.
+            val engineId = snapshot.sessions.firstOrNull { it.id == id }?.engineSessionId
+            if (engineId != null) {
+                runtime.terminalSessionOrchestrator.closeSessionForUiSession(id, engineId)
+            }
         }
         _uiState.update { state ->
             if (state.sessions.size <= 1) return@update state
