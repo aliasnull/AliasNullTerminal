@@ -8,19 +8,26 @@
 //! that interprets a parsed `Program` into typed, recognised built-in commands
 //! or a `SemanticError`. Part 27-F adds the execution core: `execute_builtin`
 //! runs a recognised built-in's deterministic in-memory semantics and returns
-//! an `ExecutionResult`.
+//! an `ExecutionResult`. Part 27-G adds the first real Kotlin <-> Rust
+//! boundary: `bridge` owns the pure "run one command string through the whole
+//! pipeline and encode the outcome" logic, and `ffi` exposes the two JNI
+//! functions (`nativeApiVersion`, `nativeExecuteCommand`) that the app's
+//! dedicated Kotlin bridge object calls.
 //!
 //! This is language-core only. It is NOT a shell, NOT a process launcher, NOT
-//! a PTY or terminal emulator, and it is not connected to the Android command
-//! system in any way:
+//! a PTY or terminal emulator, and it is NOT connected to the Android *command
+//! system*:
 //!
 //! * its only "execution" is the deterministic in-memory semantics of the
 //!   four supported built-ins (help, about, clear, echo); it does not spawn
-//!   processes, open a PTY or touch JNI;
+//!   processes, open a PTY or reach into a Linux runtime;
 //! * it is not ShellCommandExecutor, ExecutionRouter, TerminalSessionEngine or
-//!   TerminalSessionOrchestrator; and
-//! * nothing in the Android app calls into it yet (the .so is packaged but not
-//!   loaded, and NativeRuntimeBridge remains the sole Kotlin/JNI owner).
+//!   TerminalSessionOrchestrator, and Part 27-G does not route a single command
+//!   to it (the temporary frontend executor remains the visible command path);
+//! * since Part 27-G the packaged `.so` IS loaded by Kotlin -- but only through
+//!   the dedicated `AnShellCoreNativeBridge` JNI owner, never from the UI, the
+//!   ViewModel or a command handler. The C++ `NativeRuntimeBridge` remains the
+//!   sole Kotlin/JNI owner of the separate `libaliasnull_runtime.so`.
 //!
 //! Public surface exposed by this crate:
 //!
@@ -33,10 +40,17 @@
 //!   SemanticError>` over the recognised built-in vocabulary (BuiltinCommand /
 //!   BuiltinCommandKind);
 //! * execution: execute_builtin(), turning a `&BuiltinCommand` into an
-//!   `ExecutionResult` (output units plus an optional clear request).
+//!   `ExecutionResult` (output units plus an optional clear request);
+//! * bridge (internal): run_command() drives the full pipeline for one command
+//!   string; encode_outcome() serialises the outcome into the Kotlin payload.
+//! * ffi (internal): the two JNI functions Kotlin loads and calls. The single
+//!   pre-existing plain-C identity export `aliasnull_an_shell_core_api_version`
+//!   is unchanged and is the source of truth the JNI `nativeApiVersion` wraps.
 
 mod ast;
+mod bridge;
 mod execution;
+mod ffi;
 mod lexer;
 mod parser;
 mod semantic;

@@ -8,6 +8,11 @@ import app.aliasnull.shell.execution.ExecutionRouter
 import app.aliasnull.shell.execution.ShellCommandExecutor
 import app.aliasnull.shell.execution.TemporaryShellCommandExecutor
 import app.aliasnull.shell.runtime.native.AliasNullNativeRuntime
+import app.aliasnull.shell.runtime.native.AnShellCoreBridge
+import app.aliasnull.shell.runtime.native.AnShellCoreBridgeState
+import app.aliasnull.shell.runtime.native.AnShellCoreBridgeStatus
+import app.aliasnull.shell.runtime.native.AnShellCoreExecutionResult
+import app.aliasnull.shell.runtime.native.AnShellCoreResultKind
 import app.aliasnull.shell.runtime.native.NativeRuntimeResult
 import app.aliasnull.shell.runtime.native.NativeSessionOutcome
 import app.aliasnull.shell.runtime.native.NativeSessionResult
@@ -113,6 +118,30 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
     var nativeSessionResult: NativeSessionResult? = null
         private set
 
+    // ---- Observational AN Shell core bridge check (Part 27-G) ----
+    //
+    // These fields record a diagnostics-only verification of the packaged
+    // libaliasnull_an_shell_core.so that runs once after each bootstrap attempt.
+    // The check loads the core, verifies its API version and sends a fixed set of
+    // canned commands through the full native pipeline. It is purely
+    // observational: it never routes a user command to the core and never changes
+    // which backend executes commands.
+
+    /** Status of the most recent AN Shell core bridge check; null until it runs. */
+    @Volatile
+    var anShellCoreBridgeStatus: AnShellCoreBridgeStatus? = null
+        private set
+
+    /** Outcomes of the canned AN Shell core probe commands; empty until the check runs. */
+    @Volatile
+    var anShellCoreProbeResults: List<AnShellCoreExecutionResult> = emptyList()
+        private set
+
+    /** One-line human summary of the most recent AN Shell core probe. */
+    @Volatile
+    var anShellCoreProbeSummary: String? = null
+        private set
+
     @Volatile
     private var activeNativeSessionId: Long = NativeSessionResult.NO_SESSION
 
@@ -162,6 +191,7 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
                 if (!currentCoroutineContext().isActive) return@launch // cancelled during bootstrap
                 _state.value =
                     if (result.success) ShellRuntimeState.NativeBootstrapReady else ShellRuntimeState.Error
+                verifyAnShellCoreBridge()
                 if (result.success) {
                     Log.i(TAG, "Runtime state -> NativeBootstrapReady (version ${result.runtimeVersion})")
                     reserveFoundationSession()
@@ -240,6 +270,61 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
         Log.i(TAG, "Native execution backend: ${availability.status} - ${availability.message}")
     }
 
+    /**
+     * Runs the observational AN Shell core bridge check: verifies the packaged
+     * libaliasnull_an_shell_core.so handshake and, when ready, sends a fixed set
+     * of canned commands through the full native language pipeline, recording
+     * each outcome. Purely diagnostic: the results are exposed as read-only
+     * properties and logged, and nothing here changes which backend executes
+     * commands (the temporary frontend executor is untouched). A bridge failure
+     * is recorded and logged, never thrown.
+     */
+    private fun verifyAnShellCoreBridge() {
+        val bridgeStatus = runCatching { AnShellCoreBridge.verify() }
+            .getOrElse { error ->
+                AnShellCoreBridgeStatus(
+                    state = AnShellCoreBridgeState.LOAD_FAILED,
+                    message = "AN Shell core bridge verification failed: ${error.message ?: error::class.simpleName}",
+                )
+            }
+        anShellCoreBridgeStatus = bridgeStatus
+        if (!bridgeStatus.canExecute) {
+            anShellCoreProbeSummary =
+                "AN Shell core bridge not ready: ${bridgeStatus.state} - ${bridgeStatus.message}"
+            Log.w(TAG, anShellCoreProbeSummary.orEmpty())
+            return
+        }
+        val probeResults = AN_SHELL_CORE_PROBES.map { probe ->
+            runCatching { AnShellCoreBridge.execute(probe) }
+                .getOrElse { error ->
+                    AnShellCoreExecutionResult.pipelineError(
+                        kind = AnShellCoreResultKind.INTERNAL_ERROR,
+                        message = "AN Shell core probe threw unexpectedly: ${error.message ?: error::class.simpleName}",
+                    )
+                }
+        }
+        anShellCoreProbeResults = probeResults
+        val succeeded = probeResults.count { it.success }
+        val summary = StringBuilder(
+            "AN Shell core probe: bridge READY, $succeeded/${probeResults.size} probes succeeded. " +
+                bridgeStatus.message,
+        )
+        for ((probe, result) in AN_SHELL_CORE_PROBES.zip(probeResults)) {
+            summary.append(" [").append(displayProbe(probe)).append(" -> ")
+                .append(result.kind).append(" outputs=").append(result.output.size)
+            if (result.errorMessage != null) {
+                summary.append(" error=").append(result.errorMessage)
+            }
+            summary.append(']')
+        }
+        anShellCoreProbeSummary = summary.toString()
+        Log.i(TAG, anShellCoreProbeSummary.orEmpty())
+    }
+
+    /** Renders a probe command compactly for the one-line log summary. */
+    private fun displayProbe(probe: String): String =
+        if (probe.isEmpty()) "empty" else probe
+
     override fun backendAvailability(backend: ExecutionBackend): ExecutionBackendAvailability = when (backend) {
         ExecutionBackend.TEMPORARY -> ExecutionBackendAvailability.temporary()
         ExecutionBackend.NATIVE_RUNTIME -> NativeExecutionSeam.availability(
@@ -250,5 +335,9 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
 
     private companion object {
         const val TAG = "AliasNullRuntimeManager"
+
+        /** Canned commands sent through the AN Shell core by the observational probe. */
+        private val AN_SHELL_CORE_PROBES =
+            listOf("", "help", "about", "echo hello world", "clear", "unknowncommand", "\"oops")
     }
 }

@@ -1,16 +1,26 @@
-# AliasNull AN Shell core - Rust foundation crate (Part 27-B).
+# AliasNull AN Shell core - Rust foundation crate (Part 27-B, extended Part 27-G).
 #
-# This is a BUILD TOOLCHAIN bootstrap, not a shell and not a command executor.
-# The crate exists so the Android ARM64 build genuinely compiles a Rust cdylib
-# and packages it into the APK. It has zero external dependencies. See
-# src/lib.rs for what this crate deliberately does and does not implement.
+# Part 27-B established the crate as an Android ARM64 cdylib build dependency
+# that is packaged into the APK. Parts 27-C..27-F built the in-memory language
+# core (source -> lex -> parse -> analyze -> execute_builtin). Part 27-G adds a
+# JNI boundary so the packaged .so can be loaded and called from Kotlin through
+# a dedicated bridge (see src/lib.rs). The only external dependency is `jni`,
+# the standard JNI bindings, which is pure Rust and cross-compiles to Android
+# and the host test target. See src/lib.rs for what this crate deliberately
+# does and does not implement.
 [package]
 name = "aliasnull_an_shell_core"
 version = "0.1.0"
 edition = "2021"
-description = "AliasNull AN Shell core foundation (Rust bootstrap). Identity/version boundary only; no command execution."
+description = "AliasNull AN Shell core (Rust): in-memory language core plus a JNI bridge for the packaged cdylib."
 
 # A cdylib so `cargo ndk` produces libaliasnull_an_shell_core.so for
 # aarch64-linux-android, which AGP merges into the APK from jniLibs.
 [lib]
 crate-type = ["cdylib"]
+
+# `jni` is the only external dependency (Part 27-G). Default features are off:
+# this library is loaded *by* a JVM and never creates one, so the optional
+# `invocation`/java-locator machinery is intentionally not pulled in.
+[dependencies]
+jni = { version = "0.21.1", default-features = false }
