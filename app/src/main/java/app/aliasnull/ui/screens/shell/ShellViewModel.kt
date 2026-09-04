@@ -78,6 +78,14 @@ import kotlinx.coroutines.launch
  * future milestone defines the product semantics that route an engine-bound session
  * through this seam.
  *
+ * Part 26-S centralizes the association rule those dormant seams already guard: the
+ * single private predicate ([isBoundToEngineSession]) that asks "does this exact UI
+ * session still own this exact TerminalSessionId?", now applied consistently by the
+ * output-event, lifecycle-state and engine-input boundaries before any engine data is
+ * applied or sent. Engine close keeps using only the genuine association read from the
+ * closing session. Today every UI session has engineSessionId == null, so no boundary
+ * ever validates a real association and no engine interaction occurs.
+ *
  * Command execution is delegated to the runtime's [ShellCommandExecutor] (see
  * [ShellRuntimeManager]); this ViewModel never parses or simulates commands
  * itself. A submitted command is appended immediately, then the executor's event
@@ -395,7 +403,7 @@ class ShellViewModel(application: Application) : AndroidViewModel(application) {
         terminalEventJobs.remove(uiSessionId)?.cancel()
         val job = viewModelScope.launch {
             try {
-                events.collect { event -> applyEngineEvent(event, uiSessionId) }
+                events.collect { event -> applyEngineEvent(event, uiSessionId, engineSessionId) }
             } catch (cancelled: CancellationException) {
                 // Session closed or observation replaced; not an engine failure.
                 throw cancelled
@@ -410,10 +418,18 @@ class ShellViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * Translates one engine output event into an entry on the [uiSessionId] session's
-     * history. The engine event vocabulary is kept intact and is never merged with
-     * [ShellExecutionEvent] - observation is a distinct concern from command execution.
+     * history, but only while that session is still bound to the exact engine session
+     * [engineSessionId] that produced it (association safety). A stale event for a
+     * re-associated or already-removed session is ignored - it never recreates the
+     * session, never routes to the active tab, and never fabricates output. The engine
+     * event vocabulary is kept intact and is never merged with [ShellExecutionEvent].
      */
-    private fun applyEngineEvent(event: TerminalSessionEvent, uiSessionId: Long) {
+    private fun applyEngineEvent(
+        event: TerminalSessionEvent,
+        uiSessionId: Long,
+        engineSessionId: TerminalSessionId,
+    ) {
+        if (!isBoundToEngineSession(uiSessionId, engineSessionId)) return
         when (event) {
             is TerminalSessionEvent.Output -> appendToSession(uiSessionId, TerminalEntryType.OUTPUT, event.content)
             is TerminalSessionEvent.Error -> appendToSession(uiSessionId, TerminalEntryType.ERROR, event.message)
@@ -463,9 +479,8 @@ class ShellViewModel(application: Application) : AndroidViewModel(application) {
         engineSessionId: TerminalSessionId,
         state: TerminalSessionState,
     ) {
-        updateSession(uiSessionId) { session ->
-            if (session.engineSessionId == engineSessionId) session.copy(engineSessionState = state) else session
-        }
+        if (!isBoundToEngineSession(uiSessionId, engineSessionId)) return
+        updateSession(uiSessionId) { it.copy(engineSessionState = state) }
     }
 
     // ---- Engine input seam ----
@@ -498,9 +513,7 @@ class ShellViewModel(application: Application) : AndroidViewModel(application) {
     ): TerminalInputResult {
         // Association safety: the UI session must still be bound to this exact engine
         // session. When it is gone or re-associated, nothing is sent to the engine.
-        val stillBound = _uiState.value.sessions
-            .any { it.id == uiSessionId && it.engineSessionId == engineSessionId }
-        if (!stillBound) {
+        if (!isBoundToEngineSession(uiSessionId, engineSessionId)) {
             return TerminalInputResult(
                 outcome = TerminalInputOutcome.SESSION_UNAVAILABLE,
                 message = "No engine input was sent: the UI session is no longer bound to the supplied engine session.",
@@ -508,6 +521,21 @@ class ShellViewModel(application: Application) : AndroidViewModel(application) {
         }
         return runtime.terminalSessionEngine.sendInput(engineSessionId, content)
     }
+
+    // ---- Association validation ----
+
+    /**
+     * True only while the UI session [uiSessionId] currently owns exactly
+     * [engineSessionId].
+     *
+     * This is the single association rule every engine-facing path shares: a UI
+     * session may receive engine output/state or forward input only while it is still
+     * bound to that exact engine session. [uiSessionId] is used only to locate the UI
+     * session - it is never converted into a TerminalSessionId, and activeSessionId is
+     * never used as a substitute.
+     */
+    private fun isBoundToEngineSession(uiSessionId: Long, engineSessionId: TerminalSessionId): Boolean =
+        _uiState.value.sessions.any { it.id == uiSessionId && it.engineSessionId == engineSessionId }
 
     // ---- Internals ----
 
