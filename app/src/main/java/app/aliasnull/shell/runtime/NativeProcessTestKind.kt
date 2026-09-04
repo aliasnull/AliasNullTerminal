@@ -1,6 +1,7 @@
 package app.aliasnull.shell.runtime
 
 import app.aliasnull.shell.bootstrap.BaseUserspaceArtifact
+import app.aliasnull.shell.runtime.native.LaunchMode
 import app.aliasnull.shell.runtime.native.NativeProcessOutcome
 import app.aliasnull.shell.runtime.native.NativeProcessRequest
 import app.aliasnull.shell.runtime.native.NativeProcessResult
@@ -37,8 +38,10 @@ enum class NativeProcessTestKind(val title: String) {
     /**
      * The bundled AliasNull base-userspace executable (Part 27-S2): the real
      * 64-bit AArch64 executable the base bootstrap installed and verified. Its
-     * argv is the single installed absolute path (no arguments), so it runs bare
-     * and prints "AliasNull base userspace OK" then exits 0.
+     * defined launch mode is [LaunchMode.LINKER_LAUNCH], so the native runner
+     * execve()s the system dynamic linker with the executable's single installed
+     * absolute path as its argument; the real ELF then runs bare and prints
+     * "AliasNull base userspace OK" then exits 0.
      */
     BASE_USERSPACE_EXECUTABLE("Base Executable");
 
@@ -70,10 +73,13 @@ enum class NativeProcessTestKind(val title: String) {
 
     /**
      * The one structured request the bundled base-executable case authorizes:
-     * the bare argv of the bundled [BaseUserspaceArtifact.EXECUTABLE_FILE] under
-     * the verified [installedBaseUserspaceRoot]. The root is the base-userspace
-     * directory the bootstrap verified; it is never UI input, and the policy
-     * re-checks the exact path before the runner runs.
+     * its defined [LaunchMode.LINKER_LAUNCH] request - argv is the fixed system
+     * linker host [NativeExecutionPolicy.LINKER64_PATH] with the bundled
+     * [BaseUserspaceArtifact.EXECUTABLE_FILE] under the verified
+     * [installedBaseUserspaceRoot] as its single argument, and the launch mode
+     * declared LINKER_LAUNCH. The root is the base-userspace directory the
+     * bootstrap verified; it is never UI input, and the policy re-checks the exact
+     * path and mode before the runner runs.
      */
     internal fun request(installedBaseUserspaceRoot: File): NativeProcessRequest {
         require(isBundledBaseExecutable) {
@@ -81,6 +87,7 @@ enum class NativeProcessTestKind(val title: String) {
         }
         return NativeProcessRequest(
             argv = NativeExecutionPolicy.baseExecutableInvocation(installedBaseUserspaceRoot),
+            launchMode = LaunchMode.LINKER_LAUNCH,
         )
     }
 

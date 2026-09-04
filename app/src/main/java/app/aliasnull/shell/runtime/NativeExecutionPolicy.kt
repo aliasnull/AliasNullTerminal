@@ -1,6 +1,7 @@
 package app.aliasnull.shell.runtime
 
 import app.aliasnull.shell.bootstrap.BaseUserspaceArtifact
+import app.aliasnull.shell.runtime.native.LaunchMode
 import app.aliasnull.shell.runtime.native.NativeProcessRequest
 import java.io.File
 
@@ -66,14 +67,20 @@ sealed interface NativeExecutionPolicyDecision {
  * permitted, and in particular nothing routes AN Shell unknown commands here.
  *
  * The bundled AliasNull base-userspace executable is NOT part of that static
- * list, because its argv[0] is the runtime install path, which is only known
- * after the base bootstrap runs. It is instead a single path-pinned allowance:
- * [baseExecutableInvocation] builds its exact argv from the verified base
- * directory, and [decideBaseExecutable] allows ONLY that one bare argv for ONLY
- * the bundled [BaseUserspaceArtifact.EXECUTABLE_FILE] when the caller supplies
- * the verified installed executable. The runtime derives that path from the
- * verified base-userspace bootstrap - never from UI input - so no other
- * executable path or argument list can ever be selected through this seam.
+ * list, and it does not execve() directly: Android cannot execve() an ELF from
+ * app-private storage (an app_data_file has no execute_no_trans right), so the
+ * base executable's defined launch mode is [LaunchMode.LINKER_LAUNCH] - the
+ * native runner execve()s [LINKER64_PATH], a system binary whose direct exec is
+ * proven allowed, and the linker loads and runs the verified ELF as the child.
+ * [baseExecutableInvocation] builds the exact LINKER_LAUNCH host argv from the
+ * verified base directory, and [decideBaseExecutable] allows ONLY that one argv
+ * - and only with [LaunchMode.LINKER_LAUNCH] declared - for ONLY the bundled
+ * [BaseUserspaceArtifact.EXECUTABLE_FILE] when the caller supplies the verified
+ * installed executable. The runtime derives that path from the verified
+ * base-userspace bootstrap - never from UI input - so no other executable path,
+ * linker host, argument list or launch mode can ever be selected through this
+ * seam, and LINKER_LAUNCH never becomes a generic "run any file through the
+ * linker" facility.
  *
  * An allowlisted argv must run exactly as listed: requests carrying a working
  * directory, environment overrides or a stdin payload are rejected even when
@@ -117,30 +124,54 @@ object NativeExecutionPolicy {
     val LAUNCH_FAILURE_INVOCATION: List<String> = listOf(SELFCHECK_MISSING_BINARY)
 
     /**
-     * The exact argv that runs the bundled AliasNull base-userspace executable:
-     * a single bare argv whose [argv[0]] is the installed absolute path under
+     * The exact argv that runs the bundled AliasNull base-userspace executable
+     * through the system dynamic linker (the defined [LaunchMode.LINKER_LAUNCH]
+     * host argv): argv[0] is the fixed [LINKER64_PATH] and argv[1] is the
+     * installed absolute path of the bundled executable under
      * [installedBaseUserspaceRoot]. [installedBaseUserspaceRoot] must be the
      * base-userspace directory the bootstrap verified (the runtime derives it
      * from [app.aliasnull.shell.bootstrap.BaseUserspaceBootstrap.installedCheck]);
      * it is never built from UI input. The executable runs with no arguments,
-     * no shell, and no working directory/environment/stdin.
+     * no shell, and no working directory/environment/stdin. A request built from
+     * this argv must declare [LaunchMode.LINKER_LAUNCH].
      */
     fun baseExecutableInvocation(installedBaseUserspaceRoot: File): List<String> =
-        listOf(File(installedBaseUserspaceRoot, BaseUserspaceArtifact.EXECUTABLE_FILE).absolutePath)
+        listOf(
+            LINKER64_PATH,
+            File(installedBaseUserspaceRoot, BaseUserspaceArtifact.EXECUTABLE_FILE).absolutePath,
+        )
+
+    /**
+     * The fixed system dynamic linker host used for the bundled base
+     * executable's defined [LaunchMode.LINKER_LAUNCH] (Part 27-S2). It is the
+     * arm64-v8a dynamic linker that every AArch64 system image ships at this
+     * path; the bundled ELF's PT_INTERP is exactly this file, so running the
+     * executable under it uses the same loader the kernel would use. The path is
+     * fixed in policy, never read from the UI or any configuration, and [decide]
+     * never permits exec'ing it as a DIRECT executable: the linker may appear in
+     * an argv only as the argv[0] of a verified base-executable LINKER_LAUNCH
+     * request approved by [decideBaseExecutable].
+     */
+    const val LINKER64_PATH = "/system/bin/linker64"
 
     /**
      * Decides the bundled base-executable request (Part 27-S2), the single
-     * path-pinned allowance beside the static [PERMITTED_ARGV] list.
+     * path-pinned [LaunchMode.LINKER_LAUNCH] allowance beside the static
+     * [PERMITTED_ARGV] list.
      *
      * [installedBaseExecutable] is the installed bundled executable the caller
      * derived from the verified base directory. [process] is Allowed only when it
-     * is a bare argv (no working directory/environment/stdin) whose single
-     * argument is exactly that executable's absolute path AND whose file name is
-     * the manifest's allowlisted [BaseUserspaceArtifact.EXECUTABLE_FILE]. Every
-     * other shape - an arbitrary path, extra arguments, or an unexpected file
-     * name - is rejected before it can reach the native runner. The ordinary
-     * [decide] never permits this argv, so only this explicit verified path can
-     * ever select the bundled binary.
+     * is a bare LINKER_LAUNCH argv (no working directory/environment/stdin) whose
+     * argv is exactly `[LINKER64_PATH, <that executable's absolute path>]` AND
+     * whose declared [NativeProcessRequest.launchMode] is
+     * [LaunchMode.LINKER_LAUNCH] AND whose file name is the manifest's
+     * allowlisted [BaseUserspaceArtifact.EXECUTABLE_FILE]. Every other shape - a
+     * DIRECT request, a linker host other than [LINKER64_PATH], an arbitrary
+     * target path, extra arguments, or an unexpected file name - is rejected
+     * before it can reach the native runner. The ordinary [decide] never permits
+     * this argv (it rejects any non-DIRECT request and any argv whose first
+     * element is [LINKER64_PATH]), so only this explicit verified decision can
+     * ever select the bundled binary through the linker.
      */
     fun decideBaseExecutable(
         process: NativeProcessRequest,
@@ -153,10 +184,19 @@ object NativeExecutionPolicy {
                     "'${BaseUserspaceArtifact.EXECUTABLE_FILE}', not '${installedBaseExecutable.name}'.",
             )
         }
-        if (process.argv != listOf(installedBaseExecutable.absolutePath)) {
+        if (process.launchMode != LaunchMode.LINKER_LAUNCH) {
             return rejected(
                 NativeExecutionRejectionCode.EXECUTABLE_NOT_PERMITTED,
-                "Only the bundled AliasNull base executable may run as the base-executable case; " +
+                "The bundled base executable may not execve() directly on Android; " +
+                    "its defined launch mode is LINKER_LAUNCH via $LINKER64_PATH.",
+            )
+        }
+        val expected = listOf(LINKER64_PATH, installedBaseExecutable.absolutePath)
+        if (process.argv != expected) {
+            return rejected(
+                NativeExecutionRejectionCode.EXECUTABLE_NOT_PERMITTED,
+                "Only the bundled AliasNull base executable may run as the base-executable case, " +
+                    "as $LINKER64_PATH with exactly the verified executable as its argument; " +
                     "got '${display(process.argv)}'.",
             )
         }
@@ -165,52 +205,7 @@ object NativeExecutionPolicy {
         ) {
             return rejected(
                 NativeExecutionRejectionCode.ARGUMENTS_NOT_PERMITTED,
-                "The bundled base executable must run as a bare argv; " +
-                    "no working directory, environment or stdin is permitted.",
-            )
-        }
-        return NativeExecutionPolicyDecision.Allowed
-    }
-
-    // ---- TEMPORARY Part 27-S2-PERM-FIX: system-linker launch probe ----
-    // The bundled base executable's direct execve() returns EACCES on the
-    // developer device even though its mode, mount, SELinux label and categories
-    // are all exec-correct (the parent access(X_OK) passes, the child execve
-    // fails). A temporary probe therefore tests the alternate legitimate model of
-    // launching the ELF through the system dynamic linker instead of exec'ing it:
-    //   execve("/system/bin/linker64", ["/system/bin/linker64", <verified path>])
-    // This allowance is DEV-ONLY: argv[1] is pinned to the exact verified
-    // installed base executable and no other path, argument, working directory,
-    // environment or stdin is permitted. LINKER64_PATH and
-    // decideBaseExecutableViaLinkerProbe are removed together with the probe once
-    // the correct execution model is decided.
-    const val LINKER64_PATH = "/system/bin/linker64"
-
-    fun decideBaseExecutableViaLinkerProbe(
-        process: NativeProcessRequest,
-        installedBaseExecutable: File,
-    ): NativeExecutionPolicyDecision {
-        if (installedBaseExecutable.name != BaseUserspaceArtifact.EXECUTABLE_FILE) {
-            return rejected(
-                NativeExecutionRejectionCode.EXECUTABLE_NOT_PERMITTED,
-                "The linker-launch probe target must be the bundled " +
-                    "'${BaseUserspaceArtifact.EXECUTABLE_FILE}', not '${installedBaseExecutable.name}'.",
-            )
-        }
-        val expected = listOf(LINKER64_PATH, installedBaseExecutable.absolutePath)
-        if (process.argv != expected) {
-            return rejected(
-                NativeExecutionRejectionCode.EXECUTABLE_NOT_PERMITTED,
-                "The linker-launch probe may run only $LINKER64_PATH with the exact verified " +
-                    "base executable as its single argument; got '${display(process.argv)}'.",
-            )
-        }
-        if (process.workingDirectory != null || process.environment.isNotEmpty() ||
-            process.stdinBytes != null
-        ) {
-            return rejected(
-                NativeExecutionRejectionCode.ARGUMENTS_NOT_PERMITTED,
-                "The linker-launch probe must run as a bare argv; " +
+                "The bundled base executable LINKER_LAUNCH must run as a bare argv; " +
                     "no working directory, environment or stdin is permitted.",
             )
         }
@@ -220,6 +215,13 @@ object NativeExecutionPolicy {
     /**
      * Decides whether [process] may reach the native runner. Total: every request
      * yields [Allowed] or [Rejected], never a throw.
+     *
+     * [process] is Allowed only as a bare [LaunchMode.DIRECT] request (no working
+     * directory/environment/stdin) whose argv is one of [PERMITTED_ARGV]. Any
+     * [LaunchMode.LINKER_LAUNCH] request - the base executable's defined mode - is
+     * rejected here and may be approved only by [decideBaseExecutable], and
+     * [LINKER64_PATH] is never allowed as a DIRECT executable, so no generic
+     * "run this through the system linker" request can ever pass this gate.
      */
     fun decide(process: NativeProcessRequest): NativeExecutionPolicyDecision {
         val argv = process.argv
@@ -227,6 +229,20 @@ object NativeExecutionPolicy {
             return rejected(
                 NativeExecutionRejectionCode.INVALID_REQUEST,
                 "A native execution request needs a non-empty executable name.",
+            )
+        }
+        if (process.launchMode != LaunchMode.DIRECT) {
+            return rejected(
+                NativeExecutionRejectionCode.EXECUTABLE_NOT_PERMITTED,
+                "Only DIRECT launches pass the ordinary policy; a LINKER_LAUNCH request " +
+                    "is decided only for the single verified base executable by decideBaseExecutable.",
+            )
+        }
+        if (argv[0] == LINKER64_PATH) {
+            return rejected(
+                NativeExecutionRejectionCode.EXECUTABLE_NOT_PERMITTED,
+                "$LINKER64_PATH may not be exec'd directly; it runs only as the LINKER_LAUNCH " +
+                    "host of the verified base executable.",
             )
         }
         val executableAllowed = PERMITTED_ARGV.any { it.first() == argv[0] }

@@ -49,10 +49,11 @@ object NativeProcessExecutionSeam {
      *
      * [verifiedBaseExecutable], when non-null, marks [process] as the single
      * bundled base-userspace executable case (Part 27-S2): the policy gate is
-     * then [NativeExecutionPolicy.decideBaseExecutable], which allows only that
-     * one verified bare argv. It must be the installed bundled executable derived
-     * from the verified base directory - never UI input; for any other request
-     * it stays null and the ordinary [NativeExecutionPolicy.decide] applies.
+     * then [NativeExecutionPolicy.decideBaseExecutable], which allows exactly the
+     * verified base executable's [app.aliasnull.shell.runtime.native.LaunchMode.LINKER_LAUNCH]
+     * argv. It must be the installed bundled executable derived from the verified
+     * base directory - never UI input; for any other request it stays null and
+     * the ordinary [NativeExecutionPolicy.decide] applies.
      */
     suspend fun execute(
         process: NativeProcessRequest,
@@ -80,28 +81,6 @@ object NativeProcessExecutionSeam {
             NativeExecutionPolicy.decide(process)
         }
         return executeGated(process, runner, decision)
-    }
-
-    /**
-     * TEMPORARY Part 27-S2-PERM-FIX: runs the verified installed base executable
-     * through the system dynamic linker instead of exec'ing it directly:
-     *   execve("/system/bin/linker64", ["/system/bin/linker64", <verified path>])
-     * The request is pinned by [NativeExecutionPolicy.decideBaseExecutableViaLinkerProbe]
-     * to exactly that argv (no other path, argument, working directory,
-     * environment or stdin), so no arbitrary linker invocation is possible. This
-     * is a developer diagnostic to decide the correct execution model; it is
-     * removed with the probe and is never used as an on-failure fallback.
-     */
-    suspend fun executeBaseExecutableViaLinkerProbe(
-        runner: AliasNullNativeRuntime,
-        installedBaseExecutable: File,
-        dispatcher: CoroutineDispatcher = Dispatchers.Default,
-    ): NativeProcessExecutionResult {
-        val process = NativeProcessRequest(
-            argv = listOf(NativeExecutionPolicy.LINKER64_PATH, installedBaseExecutable.absolutePath),
-        )
-        val decision = NativeExecutionPolicy.decideBaseExecutableViaLinkerProbe(process, installedBaseExecutable)
-        return withContext(dispatcher) { executeGated(process, runner, decision) }
     }
 
     /**

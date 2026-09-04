@@ -215,23 +215,6 @@ private fun StatusBlock(state: NativeProcessTestUiState) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                if (result.diagnostic.isNotEmpty()) {
-                    Text(
-                        text = "--- exec diagnostic ---",
-                        style = MaterialTheme.typography.labelSmall.copy(
-                            fontFamily = FontFamily.Monospace,
-                            color = MaterialTheme.colorScheme.error,
-                        ),
-                        modifier = Modifier.padding(top = 4.dp),
-                    )
-                    result.diagnostic.forEach { line ->
-                        Text(
-                            text = line,
-                            style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
             }
         }
     }

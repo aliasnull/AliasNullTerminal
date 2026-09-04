@@ -613,10 +613,12 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
             )
         }
         val execution = if (case == NativeProcessTestKind.BASE_USERSPACE_EXECUTABLE) {
-            // The bundled base-executable case (Part 27-S2): the request is the
-            // single verified bare argv under the installed root, and the policy
-            // gate is [NativeExecutionPolicy.decideBaseExecutable] pinned to that
-            // exact verified executable (File name + absolute path re-checked), so
+            // The bundled base-executable case (Part 27-S2): its defined launch
+            // mode is LINKER_LAUNCH, so the request argv is the fixed system
+            // linker host with the single verified installed executable as its
+            // argument, and the policy gate is
+            // [NativeExecutionPolicy.decideBaseExecutable], which re-checks the
+            // executable File name, the exact argv and the LINKER_LAUNCH mode, so
             // only the installed bundled binary can ever run through this branch.
             val installedRoot = baseUserspace.installedUserspaceRoot
             NativeProcessExecutionSeam.execute(
@@ -629,23 +631,7 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
             NativeProcessExecutionSeam.execute(case.request(), nativeRuntime, Dispatchers.Default)
         }
         val expectedMet = execution is NativeProcessExecutionResult.Executed && case.matches(execution.result)
-        val diagnostic = if (case == NativeProcessTestKind.BASE_USERSPACE_EXECUTABLE && !expectedMet) {
-            // Temporary Phase-2 diagnostic (Part 27-S2-PERM-FIX): the parent
-            // access(X_OK) passed yet the child execve() returned EACCES. Capture
-            // the real on-device facts (mode bits, SELinux process/file contexts,
-            // containing mount) so noexec vs execute_no_trans vs stale install can
-            // be told apart, and run the system-linker probe to test the alternate
-            // legitimate launch model. All removed once the true cause is fixed.
-            val installedRoot = baseUserspace.installedUserspaceRoot
-            val executable = File(installedRoot, BaseUserspaceArtifact.EXECUTABLE_FILE)
-            val lines = BaseExecutableFailureDiagnostics.capture(executable).toMutableList()
-            lines += BaseExecutableFailureDiagnostics.probeViaSystemLinker(nativeRuntime, executable)
-            lines.forEach { Log.w(TAG, it) }
-            lines
-        } else {
-            emptyList()
-        }
-        return NativeProcessTestResult.Outcome(case, execution, expectedMet, diagnostic)
+        return NativeProcessTestResult.Outcome(case, execution, expectedMet)
     }
 
     /** Plain-language reason the native runtime cannot run a self-check process yet. */

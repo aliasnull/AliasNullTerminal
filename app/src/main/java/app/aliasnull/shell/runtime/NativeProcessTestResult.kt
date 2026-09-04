@@ -41,14 +41,5 @@ sealed interface NativeProcessTestResult {
         override val kind: NativeProcessTestKind,
         val execution: NativeProcessExecutionResult,
         val expectedMet: Boolean,
-        /**
-         * Optional developer diagnostic lines captured for the failing
-         * bundled-base-executable case (Part 27-S2-PERM-FIX, temporary). Empty for
-         * every other case. Shown verbatim under the outcome in the panel so the
-         * real on-device exec cause (noexec mount vs SELinux file type vs stale
-         * install) can be read from the running app; this field and its wiring are
-         * removed once the real cause is fixed.
-         */
-        val diagnostic: List<String> = emptyList(),
     ) : NativeProcessTestResult
 }
