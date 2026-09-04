@@ -52,6 +52,12 @@ import kotlinx.coroutines.launch
  * hosts the contract-only foundation, so the boundary is always queryable and
  * reports that no interactive session backend exists. The engine is a sibling of
  * command execution, never a replacement for it, and is released in [shutdown].
+ * Above the engine the manager also owns the terminal-session orchestration
+ * boundary ([terminalSessionOrchestrator]): the single place a future UI session
+ * owner requests an engine session. It is hosted by the contract-only foundation
+ * too, so such a request honestly reports that no session backend exists and no
+ * engine session is attached. The orchestrator holds no live resources and is not
+ * part of shutdown.
  */
 class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
 
@@ -83,6 +89,13 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
      * queryable and honestly reports contract-present / no session backend.
      */
     override val terminalSessionEngine: TerminalSessionEngine = TerminalSessionEngineFoundation
+
+    /**
+     * The terminal-session orchestration boundary owned by this runtime. Hosts the
+     * contract-only foundation, so a coordination request always honestly reports
+     * that no session backend exists and never attaches an engine session.
+     */
+    override val terminalSessionOrchestrator: TerminalSessionOrchestrator = TerminalSessionOrchestratorFoundation
 
     private val _state = MutableStateFlow(ShellRuntimeState.FrontendOnly)
     override val state: StateFlow<ShellRuntimeState> = _state.asStateFlow()

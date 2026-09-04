@@ -17,14 +17,17 @@ import kotlinx.coroutines.flow.asStateFlow
  * The manager is the Shell-facing abstraction over everything below it:
  *
  *   ShellRuntimeManager
- *       ├── state                 (honest [ShellRuntimeState] lifecycle)
- *       ├── executor              (resolved through the execution routing layer;
- *       │                          currently routes every command to the temporary
- *       │                          frontend executor)
- *       ├── terminalSessionEngine (the read-only terminal session engine boundary;
- *       │                          hosted by the contract-only foundation)
- *       └── native bootstrap      (loaded and initialized behind the scenes when
- *                                  the concrete manager has a native layer)
+ *       ├── state                       (honest [ShellRuntimeState] lifecycle)
+ *       ├── executor                    (resolved through the execution routing layer;
+ *       │                                currently routes every command to the
+ *       │                                temporary frontend executor)
+ *       ├── terminalSessionEngine       (the read-only terminal session engine boundary;
+ *       │                                hosted by the contract-only foundation)
+ *       ├── terminalSessionOrchestrator (the single UI-session <-> engine-session
+ *       │                                coordination boundary, hosted by the
+ *       │                                contract-only foundation)
+ *       └── native bootstrap            (loaded and initialized behind the scenes when
+ *                                        the concrete manager has a native layer)
  *
  * Command execution ([executor]) and the terminal session engine
  * ([terminalSessionEngine]) are separate, never merged concerns: the engine is
@@ -54,6 +57,18 @@ interface ShellRuntimeManager {
      * in honest terms, whether an interactive terminal session backend exists.
      */
     val terminalSessionEngine: TerminalSessionEngine
+
+    /**
+     * The terminal-session orchestration boundary: the single coordination seam
+     * between a Shell UI session and [terminalSessionEngine] (Part 26-N). A future
+     * UI session owner asks this boundary - not the engine directly - for an
+     * engine session and, later, to release one. Hosted today by the contract-only
+     * foundation, which honestly reports that no session backend exists, so no
+     * engine session is ever attached. It is not a command executor and never
+     * participates in command routing; it also owns no live resources, so runtime
+     * shutdown does not call into it.
+     */
+    val terminalSessionOrchestrator: TerminalSessionOrchestrator
 
     /**
      * Begins asynchronous bootstrap of the runtime foundation. Safe to call
@@ -108,6 +123,14 @@ class FrontendShellRuntimeManager : ShellRuntimeManager {
      * queryable and honestly reports contract-present / no session backend.
      */
     override val terminalSessionEngine: TerminalSessionEngine = TerminalSessionEngineFoundation
+
+    /**
+     * The terminal-session orchestration boundary. The frontend manager hosts the
+     * same contract-only foundation as the native manager, so a coordination
+     * request always honestly reports that no session backend exists and never
+     * attaches an engine session.
+     */
+    override val terminalSessionOrchestrator: TerminalSessionOrchestrator = TerminalSessionOrchestratorFoundation
 
     override fun initialize() {
         // Frontend-only: there is nothing to bootstrap.
