@@ -6,13 +6,17 @@
 //! layer on top: a parser that turns the lexer's token stream into a minimal
 //! AN Shell AST. Part 27-E adds the semantic layer: an `analyze` entry point
 //! that interprets a parsed `Program` into typed, recognised built-in commands
-//! or a `SemanticError`.
+//! or a `SemanticError`. Part 27-F adds the execution core: `execute_builtin`
+//! runs a recognised built-in's deterministic in-memory semantics and returns
+//! an `ExecutionResult`.
 //!
-//! This is language-core only. It is NOT a shell, NOT a command executor, NOT
-//! a parser/executor hybrid, and it is not connected to the Android command
+//! This is language-core only. It is NOT a shell, NOT a process launcher, NOT
+//! a PTY or terminal emulator, and it is not connected to the Android command
 //! system in any way:
 //!
-//! * it does not execute commands, spawn processes, open a PTY or touch JNI;
+//! * its only "execution" is the deterministic in-memory semantics of the
+//!   four supported built-ins (help, about, clear, echo); it does not spawn
+//!   processes, open a PTY or touch JNI;
 //! * it is not ShellCommandExecutor, ExecutionRouter, TerminalSessionEngine or
 //!   TerminalSessionOrchestrator; and
 //! * nothing in the Android app calls into it yet (the .so is packaged but not
@@ -27,9 +31,12 @@
 //! * parser: parse(), turning a `&[Token]` into `Result<Program, ParseError>`;
 //! * semantic: analyze(), turning a `&Program` into `Result<SemanticProgram,
 //!   SemanticError>` over the recognised built-in vocabulary (BuiltinCommand /
-//!   BuiltinCommandKind).
+//!   BuiltinCommandKind);
+//! * execution: execute_builtin(), turning a `&BuiltinCommand` into an
+//!   `ExecutionResult` (output units plus an optional clear request).
 
 mod ast;
+mod execution;
 mod lexer;
 mod parser;
 mod semantic;
@@ -37,6 +44,7 @@ mod source;
 mod token;
 
 pub use ast::{Argument, Command, Program};
+pub use execution::{execute_builtin, ExecutionResult};
 pub use lexer::{lex, LexerError};
 pub use parser::{parse, ParseError, ParseErrorKind};
 pub use semantic::{
