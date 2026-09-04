@@ -136,7 +136,7 @@ class BaseUserspaceBootstrap(
      */
     fun installedCheck(): BaseUserspaceInstalledCheck {
         val metadata = currentMetadata()
-        val validation = validateInstalledTree()
+        val validation = validateInstalledTree(installedUserspaceRoot)
         return BaseUserspaceInstalledCheck(
             metadataState = metadata.state,
             metadataVersion = metadata.artifactVersion,
