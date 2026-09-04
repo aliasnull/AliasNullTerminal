@@ -61,9 +61,13 @@ const char kDefaultPath[] = "/system/bin:/vendor/bin";
 // Reads the effective PATH: the last environment override named PATH wins,
 // otherwise the inherited environment's PATH, otherwise the default above.
 std::string effective_path(const ProcessLaunch& launch) {
+  // <unistd.h> already declares the process-global `environ` at global scope
+  // (bionic: `extern char** environ;` inside an extern "C" block), so it is
+  // referenced as ::environ. A local `extern char** environ;` here would
+  // instead declare an anonymous-namespace variable of internal linkage that
+  // never resolves to the real bionic symbol.
   std::string inherited;
-  extern char** environ;
-  for (char** e = environ; e != nullptr && *e != nullptr; ++e) {
+  for (char** e = ::environ; e != nullptr && *e != nullptr; ++e) {
     const char* entry = *e;
     if (std::strncmp(entry, "PATH=", 5) == 0) {
       inherited.assign(entry + 5);
@@ -139,8 +143,7 @@ std::string resolve_executable(const ProcessLaunch& launch, int& err_out) {
 void build_environment(const ProcessLaunch& launch,
                        std::vector<std::string>& env_storage,
                        std::vector<char*>& envp) {
-  extern char** environ;
-  for (char** e = environ; e != nullptr && *e != nullptr; ++e) {
+  for (char** e = ::environ; e != nullptr && *e != nullptr; ++e) {
     env_storage.emplace_back(*e);
   }
   for (const std::string& override : launch.environment_overrides) {
