@@ -629,7 +629,21 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
             NativeProcessExecutionSeam.execute(case.request(), nativeRuntime, Dispatchers.Default)
         }
         val expectedMet = execution is NativeProcessExecutionResult.Executed && case.matches(execution.result)
-        return NativeProcessTestResult.Outcome(case, execution, expectedMet)
+        val diagnostic = if (case == NativeProcessTestKind.BASE_USERSPACE_EXECUTABLE && !expectedMet) {
+            // Temporary Phase-2 diagnostic (Part 27-S2-PERM-FIX): the parent
+            // access(X_OK) passed yet the child execve() returned EACCES. Capture
+            // the real on-device facts (mode bits, SELinux process/file contexts,
+            // containing mount) so noexec vs execute_no_trans vs stale install can
+            // be told apart. Removed once the true cause is fixed.
+            val installedRoot = baseUserspace.installedUserspaceRoot
+            val executable = File(installedRoot, BaseUserspaceArtifact.EXECUTABLE_FILE)
+            val lines = BaseExecutableFailureDiagnostics.capture(executable)
+            lines.forEach { Log.w(TAG, it) }
+            lines
+        } else {
+            emptyList()
+        }
+        return NativeProcessTestResult.Outcome(case, execution, expectedMet, diagnostic)
     }
 
     /** Plain-language reason the native runtime cannot run a self-check process yet. */
