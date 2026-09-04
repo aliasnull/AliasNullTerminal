@@ -30,3 +30,6 @@ local.properties
 Thumbs.dbAliasNull.zip
 /AliasNull.zip
 /.claude/
+
+# Rust build output (Part 27-B)
+/rust/**/target/

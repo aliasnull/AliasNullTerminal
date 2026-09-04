@@ -15,6 +15,15 @@
 val buildNativeRuntime: Boolean =
     providers.gradleProperty("aliasnull.buildNative").orNull?.toBoolean() ?: true
 
+// Part 27-B Rust AN Shell core: the crate lives at the repository root under
+// rust/aliasnull_an_shell_core and is cross-compiled for arm64-v8a by the
+// compileAnShellCoreRust task. The produced .so is staged under this module's
+// build dir and merged into the APK by AGP (see the sourceSets block below).
+// Both the C++ runtime and the Rust core are governed by buildNativeRuntime, so
+// the Kotlin-only fallback build disables them together and stays consistent.
+val anShellCoreRustDir = rootProject.file("rust/aliasnull_an_shell_core")
+val anShellCoreJniLibsFile = layout.buildDirectory.dir("rust/jniLibs").get().asFile
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -81,10 +90,68 @@ android {
         }
     }
 
+    sourceSets {
+        getByName("main") {
+            // Part 27-B: AGP merges every arm64-v8a *.so staged under this
+            // directory into the APK. compileAnShellCoreRust populates it; when
+            // buildNativeRuntime is false the directory simply stays empty,
+            // which is harmless.
+            jniLibs.srcDir(anShellCoreJniLibsFile)
+        }
+    }
+
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
+    }
+}
+
+if (buildNativeRuntime) {
+    // Part 27-B: make the Rust build a real dependency of the Android build.
+    // compileAnShellCoreRust cross-compiles the Rust cdylib for Android
+    // arm64-v8a with cargo-ndk and stages it where the source set above merges
+    // it into the APK, so a Rust compile failure fails the APK build and a
+    // stale artifact can never satisfy the build. The Rust stable toolchain
+    // with the aarch64-linux-android target plus cargo-ndk are documented
+    // prerequisites (see rust-toolchain.toml); CI installs them, and the NDK is
+    // located through ANDROID_NDK_HOME / ANDROID_NDK_ROOT.
+    val compileAnShellCoreRust = tasks.register<Exec>("compileAnShellCoreRust") {
+        group = "build"
+        description = "Cross-compiles the AliasNull AN Shell core Rust cdylib for Android arm64-v8a and stages it for packaging."
+        workingDir(anShellCoreRustDir)
+        doFirst {
+            val ndkHome = System.getenv("ANDROID_NDK_HOME")
+            val ndkRoot = System.getenv("ANDROID_NDK_ROOT")
+            if (ndkHome.isNullOrEmpty() && ndkRoot.isNullOrEmpty()) {
+                throw GradleException(
+                    "compileAnShellCoreRust needs the Android NDK. Set ANDROID_NDK_HOME " +
+                        "(or ANDROID_NDK_ROOT), e.g. to \$ANDROID_SDK_ROOT/ndk/28.2.13676358, " +
+                        "and have the Rust stable toolchain with the aarch64-linux-android " +
+                        "target plus cargo-ndk installed (see rust-toolchain.toml).",
+                )
+            }
+        }
+        // cargo-ndk places the cdylib at <out>/arm64-v8a/libaliasnull_an_shell_core.so.
+        commandLine(
+            "cargo", "ndk",
+            "-t", "arm64-v8a",
+            "-o", anShellCoreJniLibsFile.absolutePath,
+            "build", "--release",
+        )
+        doLast {
+            val produced = anShellCoreJniLibsFile.resolve("arm64-v8a/libaliasnull_an_shell_core.so")
+            if (!produced.isFile) {
+                throw GradleException(
+                    "compileAnShellCoreRust ran but did not produce the expected artifact: " +
+                        produced.absolutePath,
+                )
+            }
+        }
+    }
+
+    tasks.named("preBuild") {
+        dependsOn(compileAnShellCoreRust)
     }
 }
 

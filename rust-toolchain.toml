@@ -1,0 +1,16 @@
+# AliasNull Rust toolchain (Part 27-B).
+#
+# rustup reads this file and installs the channel and targets automatically the
+# first time any cargo/rustc/rustup command runs inside the repository, so a
+# fresh CI runner or a fresh local checkout reproduces the same toolchain with
+# no undocumented machine-local Rust setup.
+#
+# `stable` (rather than a dated release) is intentional: the only crate is
+# dependency-free and its cdylib carries no external ABI contract yet, so there
+# is nothing to drift and no reason to build a bespoke version manager. CI and
+# local builds share this single declaration. The aarch64-linux-android target
+# is pinned here so cross-compilation is reproducible on any machine that has
+# rustup plus the Android NDK.
+[toolchain]
+channel = "stable"
+targets = ["aarch64-linux-android"]

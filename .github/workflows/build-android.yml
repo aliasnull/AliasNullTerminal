@@ -40,6 +40,20 @@ jobs:
       - name: Accept Android SDK licenses
         run: yes | sdkmanager --licenses || true
 
+      # ---- Part 27-B: Rust Android ARM64 toolchain ----
+      # The repository rust-toolchain.toml pins the channel and the
+      # aarch64-linux-android target, so a clean runner reproduces the toolchain
+      # with no machine-local Rust setup. cargo-ndk (installed from source via
+      # crates.io, not an opaque prebuilt binary) drives the cross-compile that
+      # compileAnShellCoreRust invokes during the Gradle build.
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
       - name: Make Gradle wrapper executable
         run: chmod +x gradlew
 
@@ -52,9 +66,25 @@ jobs:
 
       - name: Build ARM64 Debug APK
         run: |
+          # cargo-ndk (used by compileAnShellCoreRust) needs the NDK. AGP
+          # resolves the same NDK for the existing C++ CMake build; exporting it
+          # here keeps one NDK version for both native consumers.
+          export ANDROID_NDK_HOME="${ANDROID_SDK_ROOT}/ndk/28.2.13676358"
+          export ANDROID_NDK_ROOT="${ANDROID_SDK_ROOT}/ndk/28.2.13676358"
           ./gradlew :app:assembleDebug \
             --no-daemon \
             --stacktrace
+
+      - name: Verify Rust artifact is packaged in the APK
+        run: |
+          APK="$(find app/build/outputs/apk -name '*.apk' | head -n1)"
+          test -n "$APK" || { echo "No APK produced"; exit 1; }
+          echo "Checking $APK"
+          unzip -l "$APK" | grep -q 'lib/arm64-v8a/libaliasnull_an_shell_core\.so' \
+            || { echo "FAIL: libaliasnull_an_shell_core.so (Rust) missing from APK"; exit 1; }
+          unzip -l "$APK" | grep -q 'lib/arm64-v8a/libaliasnull_runtime\.so' \
+            && echo "OK: existing native runtime still packaged" \
+            || echo "WARN: libaliasnull_runtime.so not found (native disabled?)"
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4

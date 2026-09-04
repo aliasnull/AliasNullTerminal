@@ -1,0 +1,16 @@
+# AliasNull AN Shell core - Rust foundation crate (Part 27-B).
+#
+# This is a BUILD TOOLCHAIN bootstrap, not a shell and not a command executor.
+# The crate exists so the Android ARM64 build genuinely compiles a Rust cdylib
+# and packages it into the APK. It has zero external dependencies. See
+# src/lib.rs for what this crate deliberately does and does not implement.
+[package]
+name = "aliasnull_an_shell_core"
+version = "0.1.0"
+edition = "2021"
+description = "AliasNull AN Shell core foundation (Rust bootstrap). Identity/version boundary only; no command execution."
+
+# A cdylib so `cargo ndk` produces libaliasnull_an_shell_core.so for
+# aarch64-linux-android, which AGP merges into the APK from jniLibs.
+[lib]
+crate-type = ["cdylib"]
