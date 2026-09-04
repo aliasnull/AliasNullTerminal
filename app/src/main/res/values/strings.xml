@@ -3,7 +3,7 @@
     <string name="app_name">AliasNull</string>
     <string name="home_mark">&gt;</string>
     <string name="home_tagline">Mobile terminal · Native runtime · Linux environment</string>
-    <string name="home_stage_note">Application foundation. In this build the areas below are navigation and UI structure only — the AN Shell, ALIA packages, filesystem and native runtime are not implemented yet.</string>
+    <string name="home_stage_note">Application foundation. In this build the areas below are navigation and UI structure only — ALIA packages, filesystem and the native runtime are not implemented yet.</string>
     <string name="home_areas_label">Areas</string>
 
     <string name="nav_home">Home</string>

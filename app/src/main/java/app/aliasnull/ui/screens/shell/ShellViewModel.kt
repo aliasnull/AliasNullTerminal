@@ -5,10 +5,12 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import app.aliasnull.shell.execution.ExecutionBackend
 import app.aliasnull.shell.execution.ShellExecutionEvent
 import app.aliasnull.shell.execution.ShellExecutionRequest
 import app.aliasnull.shell.runtime.AliasNullRuntimeManager
 import app.aliasnull.shell.runtime.ShellRuntimeManager
+import app.aliasnull.shell.runtime.ShellRuntimeState
 import app.aliasnull.shell.terminal.TerminalInputOutcome
 import app.aliasnull.shell.terminal.TerminalInputResult
 import app.aliasnull.shell.terminal.TerminalSessionEvent
@@ -17,6 +19,7 @@ import app.aliasnull.shell.terminal.TerminalSessionOutcome
 import app.aliasnull.shell.terminal.TerminalSessionState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -143,6 +146,10 @@ class ShellViewModel(application: Application) : AndroidViewModel(application) {
         // Start the native runtime bootstrap when the Shell is first needed; it is
         // asynchronous, idempotent and never blocks the UI thread.
         runtime.initialize()
+        // Keep the truthful AN Shell core readiness label in step with the runtime:
+        // the label is derived from the runtime's authoritative backend availability,
+        // never guessed, and never claims READY before verification completes.
+        observeRuntimeStatus()
     }
 
     // ---- Session management ----
@@ -537,17 +544,59 @@ class ShellViewModel(application: Application) : AndroidViewModel(application) {
     private fun isBoundToEngineSession(uiSessionId: Long, engineSessionId: TerminalSessionId): Boolean =
         _uiState.value.sessions.any { it.id == uiSessionId && it.engineSessionId == engineSessionId }
 
+    // ---- Runtime status (derived, not owned) ----
+
+    /**
+     * Observes the runtime lifecycle and keeps [ShellUiState.runtimeStatus]
+     * truthful. The status is derived from the runtime's authoritative backend
+     * availability ([ShellRuntimeManager.backendAvailability]); the ViewModel only
+     * reads and exposes it, never duplicating bridge verification or JNI. Until a
+     * bootstrap attempt finishes the label stays AN_SHELL_NOT_READY, which is
+     * truthful: the fallback answers commands until the core verifies READY.
+     */
+    private fun observeRuntimeStatus() {
+        viewModelScope.launch {
+            runtime.state.collect { runtimeState ->
+                if (runtimeState.isTerminalBootstrapState()) {
+                    // The manager runs its AN Shell core bridge check right after
+                    // publishing the terminal bootstrap state, so the label is
+                    // refreshed once more after a short settle to reflect the
+                    // settled READY/unavailable outcome instead of the instant of
+                    // the state write.
+                    refreshRuntimeStatus()
+                    delay(AN_SHELL_STATUS_SETTLE_MILLIS)
+                    refreshRuntimeStatus()
+                }
+            }
+        }
+    }
+
+    private fun refreshRuntimeStatus() {
+        val availability = runtime.backendAvailability(ExecutionBackend.AN_SHELL_CORE)
+        val status =
+            if (availability.canExecute) ShellRuntimeStatus.AN_SHELL_READY
+            else ShellRuntimeStatus.AN_SHELL_NOT_READY
+        _uiState.update { state ->
+            if (state.runtimeStatus == status) state else state.copy(runtimeStatus = status)
+        }
+    }
+
+    private fun ShellRuntimeState.isTerminalBootstrapState(): Boolean = when (this) {
+        ShellRuntimeState.FrontendOnly, ShellRuntimeState.Initializing -> false
+        ShellRuntimeState.NativeBootstrapReady, ShellRuntimeState.Ready,
+        ShellRuntimeState.Stopped, ShellRuntimeState.Error -> true
+    }
+
     // ---- Internals ----
 
     private fun nextSessionTitle(): String {
         sessionOrdinal++
-        val base = "Frontend Shell"
+        val base = "Shell"
         return if (sessionOrdinal == 1) base else "$base $sessionOrdinal"
     }
 
     private fun banner(): List<TerminalEntry> = buildList {
         add(entry(TerminalEntryType.SYSTEM, "AliasNull Shell"))
-        add(entry(TerminalEntryType.SYSTEM, "Runtime backend not connected - temporary frontend commands only."))
         add(entry(TerminalEntryType.SYSTEM, "Type 'help' to list the available commands."))
     }
 
@@ -669,5 +718,17 @@ class ShellViewModel(application: Application) : AndroidViewModel(application) {
             val session = state.activeSession ?: return@update state
             state.copy(sessions = state.sessions.map { if (it.id == session.id) transform(it) else it })
         }
+    }
+
+    private companion object {
+        /**
+         * Allowance after the manager publishes its terminal bootstrap state for the
+         * AN Shell core bridge verification (run immediately afterwards inside the
+         * same initialization) to settle, so the runtime-status label reflects the
+         * settled READY/unavailable outcome rather than the transient instant of the
+         * state write. This is a read-offset for a label, not a retry or a wait on
+         * the runtime itself.
+         */
+        const val AN_SHELL_STATUS_SETTLE_MILLIS: Long = 300L
     }
 }

@@ -69,8 +69,10 @@ private const val LivePromptLineKey = "live-prompt"
  * management (switch / create / close) lives in a hidden left drawer opened from
  * a trigger in the shortcut row below the terminal. Multiple independent
  * sessions are backed by [ShellViewModel]; only the active session is rendered.
- * The AN Shell runtime is not connected - only the temporary frontend command
- * set responds.
+ * Commands route through the AN Shell core when its bridge verifies READY and
+ * through the built-in fallback command set otherwise; the slim status row above
+ * the shortcut bar reports which backend answers, derived from the runtime's
+ * authoritative readiness -- never from a UI-side guess.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -139,6 +141,7 @@ fun ShellScreen(
                 onHistoryNext = viewModel::nextCommand,
                 modifier = Modifier.weight(1f),
             )
+            RuntimeStatusRow(state.runtimeStatus)
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             ShellShortcutBar(
                 onKey = viewModel::onExtraKey,
@@ -147,6 +150,30 @@ fun ShellScreen(
             )
         }
     }
+}
+
+/**
+ * A slim, non-interactive status line between the terminal and the shortcut bar
+ * reporting which command backend is answering. It is derived from the runtime's
+ * authoritative AN Shell core readiness and is truthful by construction: READY is
+ * only ever shown once the core bridge verifies READY, and the fallback phrasing
+ * applies whenever the core is not currently ready, including before the first
+ * bootstrap check completes.
+ */
+@Composable
+private fun RuntimeStatusRow(status: ShellRuntimeStatus) {
+    val text = when (status) {
+        ShellRuntimeStatus.AN_SHELL_READY -> "AN Shell core ready"
+        ShellRuntimeStatus.AN_SHELL_NOT_READY -> "AN Shell core not ready - using built-in fallback"
+    }
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp),
+    )
 }
 
 /**
