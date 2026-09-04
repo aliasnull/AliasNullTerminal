@@ -2,6 +2,7 @@ package app.aliasnull.ui.screens.shell
 
 import androidx.compose.ui.text.input.TextFieldValue
 import app.aliasnull.shell.terminal.TerminalSessionId
+import app.aliasnull.shell.terminal.TerminalSessionState
 
 /**
  * One independent Shell UI session. Each session owns its own rendered history,
@@ -52,6 +53,15 @@ data class TerminalSession(
      * is not a process/PTY handle.
      */
     val engineSessionId: TerminalSessionId? = null,
+
+    /**
+     * Latest genuine lifecycle state reported by the engine session bound to
+     * [engineSessionId], or null when no genuine engine lifecycle state is currently
+     * available. Always null today (the engine backend is unavailable, so
+     * [engineSessionId] is null). It is never initialized to READY/ACTIVE or any
+     * other fabricated value, and it does not imply a process or PTY exists.
+     */
+    val engineSessionState: TerminalSessionState? = null,
 )
 
 /**

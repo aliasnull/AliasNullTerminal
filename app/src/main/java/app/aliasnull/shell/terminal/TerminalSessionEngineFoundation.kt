@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.Flow
  *   - [openSession]  -> [TerminalSessionOutcome.ENGINE_UNAVAILABLE] (nothing reserved),
  *   - [stateOf]      -> null (no live session can exist),
  *   - [outputEventsOf] -> null (nothing emits),
+ *   - [stateEventsOf] -> null (no live session can exist),
  *   - [sendInput]    -> [TerminalInputOutcome.ENGINE_UNAVAILABLE] (input is never
  *                       silently dropped - it is always explicitly rejected),
  *   - [closeSession] -> [TerminalSessionOutcome.SESSION_CLOSED] benign no-op
@@ -35,6 +36,8 @@ object TerminalSessionEngineFoundation : TerminalSessionEngine {
     override fun stateOf(sessionId: TerminalSessionId): TerminalSessionState? = null
 
     override fun outputEventsOf(sessionId: TerminalSessionId): Flow<TerminalSessionEvent>? = null
+
+    override fun stateEventsOf(sessionId: TerminalSessionId): Flow<TerminalSessionState>? = null
 
     override fun sendInput(sessionId: TerminalSessionId, content: String): TerminalInputResult =
         TerminalInputResult(

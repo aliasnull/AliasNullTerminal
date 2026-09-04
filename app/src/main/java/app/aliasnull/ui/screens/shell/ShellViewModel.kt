@@ -12,6 +12,7 @@ import app.aliasnull.shell.runtime.ShellRuntimeManager
 import app.aliasnull.shell.terminal.TerminalSessionEvent
 import app.aliasnull.shell.terminal.TerminalSessionId
 import app.aliasnull.shell.terminal.TerminalSessionOutcome
+import app.aliasnull.shell.terminal.TerminalSessionState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -56,6 +57,14 @@ import kotlinx.coroutines.launch
  * observer starts, nothing is collected and no event is fabricated; the seam is
  * only exercised when a real backend exists.
  *
+ * Part 26-Q adds the matching lifecycle-state observation seam and keeps it dormant
+ * too: a UI session whose engine association is genuine also observes that engine
+ * session's [TerminalSessionState] updates and stores the latest one on the session
+ * - never routed through the active tab - and closing the UI session cancels that
+ * observation. Today no UI session holds a genuine association, so no state observer
+ * starts, [TerminalSession.engineSessionState] stays null and no lifecycle state is
+ * ever fabricated; the seam is only exercised when a real backend exists.
+ *
  * Command execution is delegated to the runtime's [ShellCommandExecutor] (see
  * [ShellRuntimeManager]); this ViewModel never parses or simulates commands
  * itself. A submitted command is appended immediately, then the executor's event
@@ -93,6 +102,16 @@ class ShellViewModel(application: Application) : AndroidViewModel(application) {
      */
     private val terminalEventJobs = mutableMapOf<Long, Job>()
 
+    /**
+     * In-flight terminal-session lifecycle-state observations keyed by UI session id;
+     * at most one per session, and only ever populated when the session holds a
+     * genuine engine association. Deliberately separate from [executionJobs] and
+     * [terminalEventJobs]: lifecycle-state observation, output-event observation and
+     * command execution are independent streams with independent lifecycles, so an
+     * operation on one never cancels another.
+     */
+    private val terminalStateJobs = mutableMapOf<Long, Job>()
+
     private var nextSessionId = 0L
     private var nextEntryId = 0L
     private var sessionOrdinal = 0
@@ -117,7 +136,8 @@ class ShellViewModel(application: Application) : AndroidViewModel(application) {
      * [TerminalSession.engineSessionId] null and never fabricates an id. The
      * current engine backend is unavailable, so every new session stays unattached
      * and still exists normally. When an association is genuine, the session also
-     * starts observing that engine session's output (see [startObservingEngineSession]).
+     * starts observing that engine session's output and lifecycle state (see
+     * [startObservingEngineSession], [startObservingEngineState]).
      */
     fun createSession() {
         val id = nextSessionId++
@@ -133,7 +153,10 @@ class ShellViewModel(application: Application) : AndroidViewModel(application) {
         }
         // Only a genuine engine association is ever observed. Today the engine
         // backend is unavailable, so engineId is always null and no observer starts.
-        if (engineId != null) startObservingEngineSession(id, engineId)
+        if (engineId != null) {
+            startObservingEngineSession(id, engineId)
+            startObservingEngineState(id, engineId)
+        }
     }
 
     /**
@@ -170,8 +193,8 @@ class ShellViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * Closes the session with [id]; refuses to remove the last remaining session.
      *
-     * Any in-flight UI execution and any in-flight engine-output observation are
-     * cancelled first. A closing session releases an
+     * Any in-flight UI execution, engine-output observation and engine-state
+     * observation are cancelled first. A closing session releases an
      * engine association only when it holds a genuine one: a non-null
      * [TerminalSession.engineSessionId] is delegated to the runtime orchestration
      * boundary ([ShellRuntimeManager.terminalSessionOrchestrator]), whose engine
@@ -190,6 +213,9 @@ class ShellViewModel(application: Application) : AndroidViewModel(application) {
             // Cancel any in-flight engine-output observation before removing the
             // session and before releasing the engine association it was attached to.
             terminalEventJobs.remove(id)?.cancel()
+            // Cancel any in-flight engine-state observation before removing the
+            // session and before releasing the engine association it was attached to.
+            terminalStateJobs.remove(id)?.cancel()
             // Release a genuine engine association through the orchestration
             // boundary. engineSessionId is null today, so this never fires.
             val engineId = snapshot.sessions.firstOrNull { it.id == id }?.engineSessionId
@@ -378,6 +404,54 @@ class ShellViewModel(application: Application) : AndroidViewModel(application) {
         when (event) {
             is TerminalSessionEvent.Output -> appendToSession(uiSessionId, TerminalEntryType.OUTPUT, event.content)
             is TerminalSessionEvent.Error -> appendToSession(uiSessionId, TerminalEntryType.ERROR, event.message)
+        }
+    }
+
+    // ---- Engine state observation ----
+
+    /**
+     * Begins observing the lifecycle state of the engine session [engineSessionId]
+     * and stores each genuine state on the UI session [uiSessionId].
+     *
+     * Mirrors [startObservingEngineSession]: an observer is only ever started when a
+     * UI session exists and holds a genuine engine association, and the engine still
+     * has the final say - if `stateEventsOf` returns null (the contract-only
+     * foundation does), no observer is started. A previously started state
+     * observation for this UI session is replaced so at most one collector runs per
+     * session.
+     */
+    private fun startObservingEngineState(uiSessionId: Long, engineSessionId: TerminalSessionId) {
+        val states = runtime.terminalSessionEngine.stateEventsOf(engineSessionId) ?: return
+        terminalStateJobs.remove(uiSessionId)?.cancel()
+        val job = viewModelScope.launch {
+            try {
+                states.collect { state -> applyEngineSessionState(uiSessionId, engineSessionId, state) }
+            } catch (cancelled: CancellationException) {
+                // Session closed or observation replaced; not an engine failure.
+                throw cancelled
+            } catch (t: Throwable) {
+                // The state stream failed; never crash the screen or fabricate a
+                // lifecycle state. The session simply keeps its last honest state.
+                terminalStateJobs.remove(uiSessionId)
+            }
+        }
+        if (job.isCompleted) terminalStateJobs.remove(uiSessionId) else terminalStateJobs[uiSessionId] = job
+    }
+
+    /**
+     * Stores one genuine engine lifecycle [state] on the UI session [uiSessionId],
+     * but only while that session is still bound to the exact engine session
+     * [engineSessionId] that produced it (association safety). A stale update for a
+     * re-associated or already-removed session is ignored, so a closed session is
+     * never resurrected or reassigned by a late state event.
+     */
+    private fun applyEngineSessionState(
+        uiSessionId: Long,
+        engineSessionId: TerminalSessionId,
+        state: TerminalSessionState,
+    ) {
+        updateSession(uiSessionId) { session ->
+            if (session.engineSessionId == engineSessionId) session.copy(engineSessionState = state) else session
         }
     }
 

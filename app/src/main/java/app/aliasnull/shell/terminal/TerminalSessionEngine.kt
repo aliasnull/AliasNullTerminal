@@ -152,6 +152,7 @@ data class TerminalInputResult(
  *       ├── lifecycle boundary      -> [stateOf] + [TerminalSessionState]
  *       ├── send-input boundary     -> [sendInput]
  *       ├── output event boundary   -> [outputEventsOf] + [TerminalSessionEvent]
+ *       ├── state event boundary    -> [stateEventsOf] + [TerminalSessionState]
  *       ├── state observation       -> [stateOf] / [TerminalSessionOutcome]
  *       └── close boundary          -> [closeSession] / [shutdown]
  *
@@ -179,6 +180,20 @@ interface TerminalSessionEngine {
 
     /** The live session's output/event stream, or null when the id is not live. */
     fun outputEventsOf(sessionId: TerminalSessionId): Flow<TerminalSessionEvent>?
+
+    /**
+     * Observes the lifecycle state of the live session [sessionId] over time, or
+     * null when the id is not live or the engine hosts no state stream for it.
+     *
+     * This is the state *observation* boundary (Part 26-Q), distinct from the
+     * one-shot [stateOf] query and from [outputEventsOf]'s output/content stream.
+     * A future real backend emits [TerminalSessionState] transitions through it so a
+     * bound UI session can track lifecycle without polling [stateOf]. It does not
+     * execute commands, create or close sessions, own UI state, or imply a process
+     * or PTY exists. The contract-only foundation hosts no live session, so it
+     * returns null and never emits a fabricated lifecycle state.
+     */
+    fun stateEventsOf(sessionId: TerminalSessionId): Flow<TerminalSessionState>?
 
     /**
      * Sends [content] to a live session's input boundary. Never executed in this
