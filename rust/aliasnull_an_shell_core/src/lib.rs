@@ -1,25 +1,37 @@
-//! AliasNull AN Shell core foundation (Rust) - Part 27-B bootstrap.
+//! AliasNull AN Shell core (Rust).
 //!
-//! This crate is the smallest genuine Rust artifact on the Android ARM64 build
-//! path. It is a BUILD TOOLCHAIN bootstrap, NOT a shell and NOT a command
-//! executor. It deliberately contains:
+//! Part 27-B established this crate as a real, buildable Android ARM64 cdylib
+//! dependency of the app. Part 27-C adds the first genuine language-core
+//! foundation: a minimal AN Shell source-input model (byte-offset spans) and a
+//! small deterministic lexer that turns source text into a token stream.
 //!
-//! * no AN command syntax, lexer, parser, expansion, pipes or redirects,
-//! * no process / PTY / fork / exec and no Linux runtime,
-//! * no filesystem, no `.anpkg`, no ALIA package logic,
-//! * no JNI and no Kotlin-visible call surface, and no `System.loadLibrary` of
-//!   its own (the existing `NativeRuntimeBridge` remains the sole Kotlin/JNI
-//!   owner of the native boundary).
+//! This is language-core only. It is NOT a shell, NOT a command executor, NOT
+//! a parser, and it is not connected to the Android command system in any way:
 //!
-//! Compiling this crate successfully does NOT mean a terminal, process or Linux
-//! runtime exists, and it enables no capability flags. The crate only fixes the
-//! ownership boundary for future shell-core work: a later milestone can reach
-//! into this library through the existing native boundary.
+//! * it does not execute commands, spawn processes, open a PTY or touch JNI;
+//! * it is not ShellCommandExecutor, ExecutionRouter, TerminalSessionEngine or
+//!   TerminalSessionOrchestrator; and
+//! * nothing in the Android app calls into it yet (the .so is packaged but not
+//!   loaded, and NativeRuntimeBridge remains the sole Kotlin/JNI owner).
+//!
+//! Public surface exposed by this crate:
+//!
+//! * source: SourceText (owning input) and byte-offset SourceSpan;
+//! * token:  the minimal TokenKind / Token vocabulary;
+//! * lexer:  lex(), turning a SourceText into `Result<Vec<Token>, LexerError>`.
+
+mod lexer;
+mod source;
+mod token;
+
+pub use lexer::{lex, LexerError};
+pub use source::{SourceSpan, SourceText};
+pub use token::{Token, TokenKind};
 
 /// Returns the AliasNull AN Shell core API version as a `0x00MMmmpp`-style
 /// constant (this build: 0.1.0). Exported so the linked artifact carries a
-/// stable identity a future caller can verify; nothing calls it yet, which is
-/// intentional and honest for a toolchain-bootstrap milestone.
+/// stable identity a future caller can verify. Part 27-B established this ABI;
+/// it is preserved and unchanged. Nothing calls it yet.
 #[no_mangle]
 pub extern "C" fn aliasnull_an_shell_core_api_version() -> u32 {
     0x0000_0100

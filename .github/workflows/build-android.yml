@@ -54,6 +54,12 @@ jobs:
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
 
+      # Part 27-C: host-side Rust lexer tests. cargo test compiles for the host
+      # target (the Android ARM64 cross-build below remains separate and is
+      # exercised through the Gradle build). A failing lexer test fails CI.
+      - name: Run AN Shell core Rust tests (host)
+        run: cargo test --manifest-path rust/aliasnull_an_shell_core/Cargo.toml
+
       - name: Make Gradle wrapper executable
         run: chmod +x gradlew
 
