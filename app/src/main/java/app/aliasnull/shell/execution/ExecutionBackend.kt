@@ -7,8 +7,13 @@ package app.aliasnull.shell.execution
  * Exactly one backend is the active executor at a time, and this list is kept
  * small and honest:
  *
- *   [TEMPORARY]      - the in-process frontend executor. This is the ONLY backend
- *                      that can execute a command today.
+ *   [TEMPORARY]      - the in-process frontend executor. Always
+ *                      [ExecutionBackendStatus.ACTIVE] and the guaranteed
+ *                      fallback of the AUTO policy.
+ *   [AN_SHELL_CORE]  - the AN Shell core backend: executes one command string
+ *                      through the packaged Rust language core (lex -> parse ->
+ *                      analyze -> execute_builtin). Genuinely executable only
+ *                      while the libaliasnull_an_shell_core.so bridge is READY.
  *   [NATIVE_RUNTIME] - the future AliasNull native runtime backend (process/PTY).
  *                      It exists only as a contract/seam for now; it can never
  *                      execute a command in this milestone.
@@ -19,6 +24,7 @@ package app.aliasnull.shell.execution
  */
 enum class ExecutionBackend {
     TEMPORARY,
+    AN_SHELL_CORE,
     NATIVE_RUNTIME,
 }
 
@@ -30,6 +36,13 @@ enum class ExecutionBackend {
 enum class ExecutionBackendStatus {
     /** The backend is present and is the active command executor. */
     ACTIVE,
+
+    /**
+     * libaliasnull_an_shell_core.so bridge is not ready, so the AN Shell core
+     * backend cannot execute: the bridge has not been verified yet, the library
+     * could not be loaded, or the native API version did not match this build.
+     */
+    AN_SHELL_CORE_UNAVAILABLE,
 
     /** libaliasnull_runtime.so is not loaded, so the native backend cannot exist. */
     NATIVE_LIBRARY_UNAVAILABLE,

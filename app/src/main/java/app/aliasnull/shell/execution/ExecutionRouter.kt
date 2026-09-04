@@ -78,9 +78,12 @@ class ExecutionRouter(
 
     /**
      * AUTO / default policy: select the first genuinely executable backend from
-     * a fixed preference order (native runtime first once it is real, temporary
-     * frontend as the always-available fallback). At this milestone the native
-     * backend is never executable, so this always resolves to [ExecutionBackend.TEMPORARY].
+     * a fixed preference order. The AN Shell core backend is preferred once its
+     * libaliasnull_an_shell_core.so bridge is READY; the temporary frontend
+     * executor is the always-available fallback. The C++ native runtime is never
+     * executable at this milestone, so AUTO resolves to
+     * [ExecutionBackend.AN_SHELL_CORE] when ready and otherwise to
+     * [ExecutionBackend.TEMPORARY].
      */
     fun resolveAuto(): ExecutionRoute {
         for (backend in AUTO_PREFERENCE_ORDER) {
@@ -135,8 +138,11 @@ class ExecutionRouter(
     }
 
     private companion object {
-        /** AUTO preference order: native first once it becomes genuinely executable. */
+        /** AUTO preference order: the AN Shell core first once its bridge is READY,
+         * then the native runtime once it becomes genuinely executable, and the
+         * temporary frontend executor as the always-available fallback. */
         val AUTO_PREFERENCE_ORDER = listOf(
+            ExecutionBackend.AN_SHELL_CORE,
             ExecutionBackend.NATIVE_RUNTIME,
             ExecutionBackend.TEMPORARY,
         )

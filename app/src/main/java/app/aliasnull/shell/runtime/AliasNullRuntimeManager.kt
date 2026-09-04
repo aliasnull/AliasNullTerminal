@@ -11,6 +11,7 @@ import app.aliasnull.shell.runtime.native.AliasNullNativeRuntime
 import app.aliasnull.shell.runtime.native.AnShellCoreBridge
 import app.aliasnull.shell.runtime.native.AnShellCoreBridgeState
 import app.aliasnull.shell.runtime.native.AnShellCoreBridgeStatus
+import app.aliasnull.shell.runtime.native.AnShellCoreCommandExecutor
 import app.aliasnull.shell.runtime.native.AnShellCoreExecutionResult
 import app.aliasnull.shell.runtime.native.AnShellCoreResultKind
 import app.aliasnull.shell.runtime.native.NativeRuntimeResult
@@ -33,11 +34,14 @@ import kotlinx.coroutines.launch
  * The app's [ShellRuntimeManager]: owns the honest runtime lifecycle and drives
  * the native bootstrap foundation behind [AliasNullNativeRuntime].
  *
- * Command execution behavior is deliberately unchanged: [executor] resolves
- * through the execution routing layer, whose AUTO route sends every command to
- * the temporary frontend executor. Native bootstrap success only moves [state]
- * to [ShellRuntimeState.NativeBootstrapReady] - it does not make the executor
- * native, and a bootstrap failure only moves it to [ShellRuntimeState.Error]
+ * Command execution resolves through the execution routing layer: once the AN
+ * Shell core bridge is READY, the AUTO route prefers the AN Shell core executor
+ * (a genuinely executable backend over the Rust language core); until then - and
+ * whenever that bridge is not ready - every command goes to the temporary
+ * frontend executor, which is never removed and remains the guaranteed fallback.
+ * Native bootstrap success only moves [state]
+ * to [ShellRuntimeState.NativeBootstrapReady] - it does not make the C++ runtime
+ * execute commands, and a bootstrap failure only moves it to [ShellRuntimeState.Error]
  * while the Shell keeps working through the frontend executor.
  *
  * On a successful bootstrap the manager also reserves one native session slot
@@ -68,19 +72,30 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
 
     private val nativeRuntime: AliasNullNativeRuntime = AliasNullNativeRuntime(application)
 
-    /** The genuinely executable temporary backend - the only real executor today. */
+    /** The genuinely executable temporary backend - the guaranteed AUTO fallback. */
     private val temporaryExecutor: ShellCommandExecutor = TemporaryShellCommandExecutor()
 
     /**
+     * The AN Shell core executor: a genuinely executable backend that sends one
+     * command string through the packaged Rust language core whenever its bridge
+     * is READY. It calls only the [AnShellCoreBridge] facade, never JNI directly.
+     */
+    private val anShellCoreExecutor: ShellCommandExecutor = AnShellCoreCommandExecutor()
+
+    /**
      * The execution routing layer: the single decision point that resolves each
-     * execution request to a genuinely executable backend. Today AUTO resolves to
-     * [temporaryExecutor]; the native backend is never executable and never
-     * receives a command. Exposed through [ShellRuntimeManager.executor] so the
-     * Shell and ViewModel never see backend selection or JNI.
+     * execution request to a genuinely executable backend. Once the AN Shell core
+     * bridge is READY the AUTO policy selects [anShellCoreExecutor]; otherwise it
+     * selects [temporaryExecutor]. The C++ native backend is never executable and
+     * never receives a command. Exposed through [ShellRuntimeManager.executor] so
+     * the Shell and ViewModel never see backend selection or JNI.
      */
     private val executionRouter: ExecutionRouter by lazy {
         ExecutionRouter(
-            executableBackends = mapOf(ExecutionBackend.TEMPORARY to temporaryExecutor),
+            executableBackends = mapOf(
+                ExecutionBackend.TEMPORARY to temporaryExecutor,
+                ExecutionBackend.AN_SHELL_CORE to anShellCoreExecutor,
+            ),
             availabilityOf = ::backendAvailability,
         )
     }
@@ -123,9 +138,11 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
     // These fields record a diagnostics-only verification of the packaged
     // libaliasnull_an_shell_core.so that runs once after each bootstrap attempt.
     // The check loads the core, verifies its API version and sends a fixed set of
-    // canned commands through the full native pipeline. It is purely
-    // observational: it never routes a user command to the core and never changes
-    // which backend executes commands.
+    // canned commands through the full native pipeline. It never routes a user
+    // command to the core itself. The READY status this check establishes is the
+    // status [backendAvailability] reports for the AN Shell core backend, so a
+    // successful check is what lets the AUTO policy prefer that backend for later
+    // commands.
 
     /** Status of the most recent AN Shell core bridge check; null until it runs. */
     @Volatile
@@ -153,8 +170,10 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
 
     init {
         // One line at construction: the routing decision the Shell will use.
-        // AUTO resolves to the temporary backend while native execution is not
-        // implemented; the route's selected backend is always the actual one.
+        // The core bridge has not been verified yet, so AUTO resolves to the
+        // temporary backend here; once initialize() verifies the AN Shell core it
+        // becomes READY and AUTO prefers that backend for later commands. The
+        // route's selected backend is always the actual one.
         val route = executionRouter.resolveAuto()
         Log.i(
             TAG,
@@ -215,7 +234,10 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
             terminalSessionEngine.shutdown()
             runCatching { nativeRuntime.shutdown() }
                 .onFailure { Log.w(TAG, "Native shutdown reported a problem", it) }
-            // With the native bootstrap released only the frontend executor remains.
+            // With the native (C++) bootstrap released, no native session or
+            // bootstrap state remains; the frontend executor stays available and
+            // the AN Shell core backend is untouched (it is independent of the
+            // C++ runtime's lifecycle).
             if (_state.value == ShellRuntimeState.NativeBootstrapReady) {
                 _state.value = ShellRuntimeState.FrontendOnly
             }
@@ -274,10 +296,12 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
      * Runs the observational AN Shell core bridge check: verifies the packaged
      * libaliasnull_an_shell_core.so handshake and, when ready, sends a fixed set
      * of canned commands through the full native language pipeline, recording
-     * each outcome. Purely diagnostic: the results are exposed as read-only
-     * properties and logged, and nothing here changes which backend executes
-     * commands (the temporary frontend executor is untouched). A bridge failure
-     * is recorded and logged, never thrown.
+     * each outcome. Diagnostic by intent: the results are exposed as read-only
+     * properties and logged. The READY status this check establishes is the same
+     * status [backendAvailability] reports for the AN Shell core backend, so a
+     * successful check is what lets the AUTO policy prefer that backend for later
+     * commands; the check itself never routes a user command. A bridge failure is
+     * recorded and logged, never thrown.
      */
     private fun verifyAnShellCoreBridge() {
         val bridgeStatus = runCatching { AnShellCoreBridge.verify() }
@@ -327,6 +351,7 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
 
     override fun backendAvailability(backend: ExecutionBackend): ExecutionBackendAvailability = when (backend) {
         ExecutionBackend.TEMPORARY -> ExecutionBackendAvailability.temporary()
+        ExecutionBackend.AN_SHELL_CORE -> AnShellCoreExecutionSeam.availability(AnShellCoreBridge.currentStatus())
         ExecutionBackend.NATIVE_RUNTIME -> NativeExecutionSeam.availability(
             nativeLibraryAvailable = nativeRuntime.isNativeLibraryLoaded,
             nativeBootstrapActive = nativeRuntime.isNativeBootstrapActive,

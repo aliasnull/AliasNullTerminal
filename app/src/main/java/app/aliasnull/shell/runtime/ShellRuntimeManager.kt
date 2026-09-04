@@ -5,6 +5,8 @@ import app.aliasnull.shell.execution.ExecutionBackendAvailability
 import app.aliasnull.shell.execution.ExecutionRouter
 import app.aliasnull.shell.execution.ShellCommandExecutor
 import app.aliasnull.shell.execution.TemporaryShellCommandExecutor
+import app.aliasnull.shell.runtime.native.AnShellCoreBridge
+import app.aliasnull.shell.runtime.native.AnShellCoreCommandExecutor
 import app.aliasnull.shell.terminal.TerminalSessionEngine
 import app.aliasnull.shell.terminal.TerminalSessionEngineFoundation
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -19,8 +21,8 @@ import kotlinx.coroutines.flow.asStateFlow
  *   ShellRuntimeManager
  *       ├── state                       (honest [ShellRuntimeState] lifecycle)
  *       ├── executor                    (resolved through the execution routing layer;
- *       │                                currently routes every command to the
- *       │                                temporary frontend executor)
+ *       │                                prefers the AN Shell core backend when its bridge
+ *       │                                is READY, else the temporary frontend executor)
  *       ├── terminalSessionEngine       (the read-only terminal session engine boundary;
  *       │                                hosted by the contract-only foundation)
  *       ├── terminalSessionOrchestrator (the single UI-session <-> engine-session
@@ -36,9 +38,11 @@ import kotlinx.coroutines.flow.asStateFlow
  *
  * [initialize] brings up whichever runtime foundation the concrete manager has
  * (the frontend-only manager has none and stays on [ShellRuntimeState.FrontendOnly]).
- * Initializing the native bootstrap must never be conflated with command
- * execution becoming native: routing moves to a native backend only in a future
- * phase when a real AliasNull execution backend exists and can genuinely run.
+ * Initializing the C++ native bootstrap must never be conflated with command
+ * execution becoming native: routing moves to the native runtime backend only in
+ * a future phase when that backend exists and can genuinely run. The AN Shell
+ * core backend (Rust) is a separate, real command backend that the concrete
+ * managers wire in once its bridge is READY.
  */
 interface ShellRuntimeManager {
 
@@ -82,34 +86,50 @@ interface ShellRuntimeManager {
     /**
      * Describes whether a specific [ExecutionBackend] can execute commands right
      * now, in honest [ExecutionBackendStatus] terms. The temporary backend is
-     * always [ExecutionBackendStatus.ACTIVE]; the native backend reports exactly
-     * why it cannot run (library unavailable / not bootstrapped / not
-     * implemented). This is the runtime boundary's own answer - no JNI leaks to
-     * callers.
+     * always [ExecutionBackendStatus.ACTIVE]; the AN Shell core backend reports
+     * ACTIVE only while its bridge is READY and otherwise exactly why it is not
+     * ready; the native backend reports why it cannot run (library unavailable /
+     * not bootstrapped / not implemented). This is the runtime boundary's own
+     * answer - no JNI leaks to callers.
      */
     fun backendAvailability(backend: ExecutionBackend): ExecutionBackendAvailability
 }
 
 /**
- * Pure frontend manager: no native layer is attached, so the state stays
- * [ShellRuntimeState.FrontendOnly] and only the temporary executor responds.
- * Kept as the minimal, always-correct fallback; the app normally uses
- * [AliasNullRuntimeManager], which additionally drives native bootstrap.
+ * Pure frontend manager: no native bootstrap is attached, so the state stays
+ * [ShellRuntimeState.FrontendOnly] and AUTO resolves to the temporary executor.
+ * The AN Shell core backend is registered (so the routing layer can describe it)
+ * but is never ACTIVE under this manager, because nothing here verifies or loads
+ * the core bridge; its status therefore stays NOT_ATTEMPTED and AUTO always falls
+ * through to the temporary executor. Kept as the minimal, always-correct fallback;
+ * the app normally uses [AliasNullRuntimeManager], which additionally drives native
+ * bootstrap and verifies the AN Shell core.
  */
 class FrontendShellRuntimeManager : ShellRuntimeManager {
     override val state: StateFlow<ShellRuntimeState> =
         MutableStateFlow(ShellRuntimeState.FrontendOnly).asStateFlow()
 
-    /** The genuinely executable temporary backend - the only real executor today. */
+    /** The genuinely executable temporary backend - always ACTIVE under this manager. */
     private val temporaryExecutor: ShellCommandExecutor = TemporaryShellCommandExecutor()
 
     /**
-     * Execution routing layer; AUTO always resolves to the temporary executor
-     * because this manager has no native layer at all.
+     * The AN Shell core backend. Registered so the routing layer can describe it,
+     * but never ACTIVE here: nothing in this manager verifies (loads) the core
+     * bridge, so its status stays NOT_ATTEMPTED and AUTO keeps resolving to the
+     * temporary executor.
+     */
+    private val anShellCoreExecutor: ShellCommandExecutor = AnShellCoreCommandExecutor()
+
+    /**
+     * Execution routing layer; AUTO resolves to the temporary executor because
+     * this manager never makes the AN Shell core bridge READY.
      */
     private val executionRouter: ExecutionRouter by lazy {
         ExecutionRouter(
-            executableBackends = mapOf(ExecutionBackend.TEMPORARY to temporaryExecutor),
+            executableBackends = mapOf(
+                ExecutionBackend.TEMPORARY to temporaryExecutor,
+                ExecutionBackend.AN_SHELL_CORE to anShellCoreExecutor,
+            ),
             availabilityOf = ::backendAvailability,
         )
     }
@@ -144,6 +164,7 @@ class FrontendShellRuntimeManager : ShellRuntimeManager {
 
     override fun backendAvailability(backend: ExecutionBackend): ExecutionBackendAvailability = when (backend) {
         ExecutionBackend.TEMPORARY -> ExecutionBackendAvailability.temporary()
+        ExecutionBackend.AN_SHELL_CORE -> AnShellCoreExecutionSeam.availability(AnShellCoreBridge.currentStatus())
         ExecutionBackend.NATIVE_RUNTIME -> NativeExecutionSeam.availability(
             nativeLibraryAvailable = false,
             nativeBootstrapActive = false,
