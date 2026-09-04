@@ -1,17 +1,30 @@
 package app.aliasnull.ui.screens.shell
 
 import androidx.compose.ui.text.input.TextFieldValue
+import app.aliasnull.shell.terminal.TerminalSessionId
 
 /**
- * One independent terminal session. Each session owns its own rendered history,
+ * One independent Shell UI session. Each session owns its own rendered history,
  * current input line, in-memory command history, and command-history browsing
  * position, so switching sessions never leaks state between them.
  *
  * [title] is dynamic session state: it is generated when the session is created
  * and may later be replaced by runtime-derived context once a real backend
  * exists. It is never a hardcoded, UI-level session label.
+ *
+ * Identity reconciliation (Part 26-M): [id] is UI-local - a per-process counter
+ * used to select the active tab and to correlate command submissions. It is NOT
+ * an engine identity. [engineSessionId] is the only place an association to a
+ * future TerminalSessionEngine session may live, and it stays null until a real
+ * backend opens a session: a UI session never fabricates an engine session.
  */
 data class TerminalSession(
+    /**
+     * This UI session's key within the process: selects the active tab/session and
+     * is passed as the ShellExecutionRequest session id on the batch command path.
+     * Generated per process from a counter, never persisted, and not an engine
+     * identity, a native slot id, or a PID. See [engineSessionId].
+     */
     val id: Long,
     val title: String,
     val entries: List<TerminalEntry> = emptyList(),
@@ -29,6 +42,16 @@ data class TerminalSession(
      * completion so the session is ready for the next command.
      */
     val isExecuting: Boolean = false,
+
+    /**
+     * Optional association to a future TerminalSessionEngine session. Always null
+     * today because the engine is contract-only (no session backend exists): a UI
+     * session legitimately exists with no engine session, and absence is the honest
+     * default. A real backend would set this exactly once when it opens an engine
+     * session for this UI session. It is never fabricated, never equals [id], and
+     * is not a process/PTY handle.
+     */
+    val engineSessionId: TerminalSessionId? = null,
 )
 
 /**

@@ -27,6 +27,16 @@ import kotlinx.coroutines.launch
  * history, browsing position, input line and execution state; switching sessions
  * never moves state between them.
  *
+ * UI session identity is deliberately UI-local. [TerminalSession.id] is a
+ * per-process counter used to select the active tab and to correlate command
+ * submissions ([ShellExecutionRequest] session id); it is not a TerminalSessionId
+ * and never becomes one. No engine session is opened for a UI session while the
+ * terminal engine is contract-only, and closing a UI session that has no engine
+ * association needs no engine call. If a future backend ever associates an engine
+ * session, this ViewModel is where that optional association would be bridged from
+ * the runtime's engine boundary - never fabricated. Runtime shutdown remains the
+ * single engine cleanup authority (ShellRuntimeManager.terminalSessionEngine).
+ *
  * Command execution is delegated to the runtime's [ShellCommandExecutor] (see
  * [ShellRuntimeManager]); this ViewModel never parses or simulates commands
  * itself. A submitted command is appended immediately, then the executor's event
@@ -91,7 +101,14 @@ class ShellViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Closes the session with [id]; refuses to remove the last remaining session. */
+    /**
+     * Closes the session with [id]; refuses to remove the last remaining session.
+     *
+     * UI sessions today carry no engine association (see [TerminalSession.engineSessionId]),
+     * so nothing engine-side is closed here. Should a future backend associate an
+     * engine session, releasing it is the engine owner's responsibility at the
+     * runtime boundary, not this ViewModel's, and never a fabricated engine close.
+     */
     fun closeSession(id: Long) {
         // Cancel any in-flight execution before removing the session so its event
         // stream cannot keep running after the session disappears.
