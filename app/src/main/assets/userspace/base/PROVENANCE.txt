@@ -1,0 +1,49 @@
+AliasNull base userspace artifact - provenance and scope (Part 27-R)
+
+Scope of this artifact
+----------------------
+This artifact is the versioned base-userspace FOUNDATION for AliasNull. It
+establishes, in the app-private runtime directory, a real, verified, versioned
+record of what the AliasNull base userland is and is not, so that later
+milestones can install genuine components on a known-good base. It is not a
+shell, not a command backend, not a native runtime, and not a Linux rootfs.
+
+Provenance of every file
+------------------------
+All files in this artifact (VERSION, ARCH, DESCRIPTION, PROVENANCE.txt,
+LICENSE.txt) are original AliasNull-authored documentation/metadata. None is a
+binary, an executable, a third-party component, or a copy of a host/system
+file. Each file's origin is therefore the AliasNull repository itself:
+
+  - Source project:  AliasNull (app/src/main/assets/userspace/base)
+  - Build method:    bundled verbatim into the signed APK as a plain asset; no
+                     transformation, no compilation, no download.
+  - Target arch:     arm64-v8a (see ARCH). These are plain-text files, so the
+                     architecture marker records the ABI this build is produced
+                     for rather than any machine code property.
+  - License:         see LICENSE.txt.
+
+Why each file is required
+-------------------------
+  VERSION        - single source of truth for the base artifact version so the
+                   bootstrap can distinguish an already-installed matching base
+                   from a different/upgradeable one without guessing.
+  ARCH           - records the supported ABI so a future arm64 tool installer
+                   can assert compatibility instead of assuming it.
+  DESCRIPTION    - a precise statement of what the artifact is (and is not) so
+                   no future reader mistakes it for a real filesystem.
+  PROVENANCE.txt - this file: traceable provenance per component, as required
+                   for any component shipped in the base artifact.
+  LICENSE.txt    - licensing note.
+
+No Android /system binaries are part of this artifact. The controlled native
+runtime tests (Echo/Stderr/Non-zero Exit/Launch Failure) still execute Android
+host binaries strictly internally for diagnostics; those are NOT AliasNull
+userspace and are deliberately not routed to it.
+
+Honest limitation
+-----------------
+No real arm64 userland executables are bundled here yet: none that is genuinely
+required for the base runtime can currently be produced reproducibly for
+arm64-v8a from this repository, and the phase rules forbid a fake substitute.
+Real tools are a later milestone layered on this foundation.

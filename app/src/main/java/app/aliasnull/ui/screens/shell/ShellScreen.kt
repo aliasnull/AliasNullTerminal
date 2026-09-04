@@ -190,7 +190,7 @@ private fun ShellInitializingPane(modifier: Modifier = Modifier) {
         contentAlignment = Alignment.Center,
     ) {
         Text(
-            text = "Initializing the AliasNull runtime...\nVerifying the AN Shell core...",
+            text = "Initializing the AliasNull runtime...\nPreparing the AliasNull base userspace...\nVerifying the AN Shell core...",
             style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

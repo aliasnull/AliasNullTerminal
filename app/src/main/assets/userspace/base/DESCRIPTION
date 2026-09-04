@@ -1,0 +1,25 @@
+AliasNull base userspace - versioned foundation artifact.
+
+This is the first real, versioned AliasNull base-userspace artifact (Part 27-R).
+It is NOT a Linux filesystem, a rootfs image, or a set of system tools. It is a
+minimal, honest, self-identifying foundation that AliasNull installs into its
+private runtime directory and verifies before the runtime reports ready.
+
+It intentionally contains NO executables. No arm64 tool that is genuinely
+required for the base runtime can yet be produced reproducibly from this
+repository, so none is bundled or faked. Future userland tools (a package
+manager, Python, Git, and other optional packages) will be real, separately
+produced arm64 components installed on top of this foundation as a later
+milestone; this artifact only establishes the versioned base they build upon.
+
+Contents (all files are original AliasNull-authored metadata/documentation):
+  VERSION           - the base artifact version (single source of truth)
+  ARCH              - the target architecture this build is produced for
+  DESCRIPTION       - this description
+  PROVENANCE.txt    - provenance and scope of every file in the artifact
+  LICENSE.txt       - licensing note for the artifact files
+
+Version:   see VERSION
+Arch:      see ARCH
+Produced:  deterministically from the AliasNull repository (app/src/main/assets/
+           userspace/base) and shipped inside the signed APK.

@@ -80,9 +80,10 @@ data class ShellUiState(
     /**
      * The Shell's command-backend gate, as published by the runtime. This is the
      * value the UI observes and branches on (INITIALIZING / READY / FAILED); the
-     * UI does not derive or fabricate it. Global (not per session). Starts at the
-     * truthful pre-verification INITIALIZING phase until the runtime's real
-     * verification attempt publishes a READY or FAILED gate.
+     * UI does not derive or fabricate it. READY means the runtime verified both
+     * the AN Shell core and the AliasNull base userspace. Global (not per
+     * session). Starts at the truthful pre-verification INITIALIZING phase until
+     * the runtime's real verification attempt publishes a READY or FAILED gate.
      */
     val runtimeStatus: ShellBackendState = ShellBackendState.INITIALIZING,
     /**

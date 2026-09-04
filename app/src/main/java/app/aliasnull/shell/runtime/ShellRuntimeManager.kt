@@ -14,7 +14,8 @@ import kotlinx.coroutines.flow.StateFlow
  *
  *   ShellRuntimeManager
  *       ├── shellBackendState           (the Shell gate: INITIALIZING / READY /
- *       │                                FAILED for the AN Shell core backend)
+ *       │                                FAILED; READY requires both the AN Shell
+ *       │                                core and a verified base userspace)
  *       ├── executor                    (resolved through the execution routing layer;
  *       │                                the AN Shell core backend, which is the only
  *       │                                shell command backend and is executable only
@@ -33,12 +34,14 @@ import kotlinx.coroutines.flow.StateFlow
  * not a [ShellCommandExecutor] and never receives a command from the routing
  * layer.
  *
- * Command-backend readiness is the AN Shell core. The single authoritative
- * readiness fact is the bridge status (AnShellCoreBridge.currentStatus), surfaced
- * through [backendAvailability]; [shellBackendState] is that same fact plus the
- * runtime's own initialization phase, so the Shell never guesses when it may run
- * commands and never falls back to a fake backend. [state] is a separate axis: it
- * tracks the C++ native foundation bootstrap, which never executes commands.
+ * Shell command-backend readiness is [shellBackendState], which reports READY
+ * only when BOTH the AN Shell core bridge verifies READY (the authoritative
+ * bridge fact, AnShellCoreBridge.currentStatus, surfaced through
+ * [backendAvailability]) AND the AliasNull base userspace is installed and
+ * verified (Part 27-R). [shellBackendState] therefore never guesses when the
+ * Shell may run commands and never falls back to a fake backend. [state] is a
+ * separate axis: it tracks the C++ native foundation bootstrap, which never
+ * executes commands.
  */
 interface ShellRuntimeManager {
 
@@ -53,10 +56,12 @@ interface ShellRuntimeManager {
     /**
      * The Shell gate: one unambiguous value describing whether the interactive
      * Shell may accept commands. READY is reported only once the AN Shell core
-     * bridge genuinely verifies READY; FAILED only after a real attempt completes
-     * without one; INITIALIZING while an attempt is running or none has finished.
-     * Derived by this runtime from the single authoritative readiness path, never
-     * fabricated by a timer or the UI.
+     * bridge genuinely verifies READY AND the AliasNull base userspace is
+     * installed and verified; FAILED only after a real attempt completes without
+     * a READY core or without a verified base userspace; INITIALIZING while an
+     * attempt is running or none has finished. Derived by this runtime from the
+     * single authoritative readiness path, never fabricated by a timer or the
+     * UI.
      */
     val shellBackendState: StateFlow<ShellBackendState>
 
@@ -86,10 +91,11 @@ interface ShellRuntimeManager {
     val terminalSessionOrchestrator: TerminalSessionOrchestrator
 
     /**
-     * Begins asynchronous initialization: the native-foundation bootstrap and then
-     * the AN Shell core bridge verification that decides [shellBackendState]. Safe
-     * to call repeatedly; a new attempt is started only when none is running and
-     * the backend is not already READY.
+     * Begins asynchronous initialization: the native-foundation bootstrap, the
+     * base-userspace bootstrap (Part 27-R), and then the AN Shell core bridge
+     * verification that, together with the verified base userspace, decides
+     * [shellBackendState]. Safe to call repeatedly; a new attempt is started
+     * only when none is running and the backend is not already READY.
      */
     fun initialize()
 
@@ -126,11 +132,12 @@ interface ShellRuntimeManager {
      * Shell command here and the runner remains disconnected from command
      * routing.
      *
-     * When the native runtime is not loaded and bootstrapped the case is not
-     * attempted and [NativeProcessTestResult.NotReady] is returned - execution is
-     * never forced on an unready runtime. The blocking native run happens off the
-     * caller's thread on the runtime's background dispatcher, so this suspend
-     * function is safe to call from the main thread.
+     * When the native runtime is not loaded and bootstrapped, or the AliasNull
+     * base userspace is not installed and verified (Part 27-R), the case is not
+     * attempted and [NativeProcessTestResult.NotReady] is returned - execution
+     * is never forced on an unready runtime. The blocking native run happens off
+     * the caller's thread on the runtime's background dispatcher, so this
+     * suspend function is safe to call from the main thread.
      */
     suspend fun runNativeProcessTest(case: NativeProcessTestKind): NativeProcessTestResult
 }

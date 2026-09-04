@@ -1,0 +1,9 @@
+License note for the AliasNull base-userspace artifact (Part 27-R)
+
+The files in this artifact directory (VERSION, ARCH, DESCRIPTION,
+PROVENANCE.txt, LICENSE.txt) are original AliasNull-authored metadata and
+documentation produced from the AliasNull repository. They are not third-party
+code and do not bundle any external component, binary, or image.
+
+They are distributed under the same terms as the AliasNull project source in
+which they live. Refer to the repository LICENSE for the applicable terms.

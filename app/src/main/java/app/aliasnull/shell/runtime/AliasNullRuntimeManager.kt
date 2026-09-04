@@ -2,6 +2,11 @@ package app.aliasnull.shell.runtime
 
 import android.app.Application
 import android.util.Log
+import app.aliasnull.shell.bootstrap.BaseUserspaceArtifact
+import app.aliasnull.shell.bootstrap.BaseUserspaceBootstrap
+import app.aliasnull.shell.bootstrap.BaseUserspaceBootstrapState
+import app.aliasnull.shell.bootstrap.BaseUserspaceInstalledCheck
+import app.aliasnull.shell.bootstrap.BaseUserspaceResult
 import app.aliasnull.shell.execution.ExecutionBackend
 import app.aliasnull.shell.execution.ExecutionBackendAvailability
 import app.aliasnull.shell.execution.ExecutionRouter
@@ -79,6 +84,19 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
     private val nativeRuntime: AliasNullNativeRuntime = AliasNullNativeRuntime(application)
 
     /**
+     * The real AliasNull base-userspace bootstrap (Part 27-R): installs and
+     * verifies the bundled, versioned base artifact inside the app-private
+     * runtime root ([BaseUserspaceBootstrap]). It is a separate layer from the
+     * C++ native bootstrap, the AN Shell core and the native process runner, and
+     * it never executes anything. The Shell gate and the controlled native
+     * self-check require it to be verified ready before full runtime readiness
+     * is reported, so a missing or corrupted base userspace is never silently
+     * accepted.
+     */
+    private val baseUserspace: BaseUserspaceBootstrap =
+        BaseUserspaceBootstrap(application, nativeRuntime.runtimeRoot)
+
+    /**
      * The AN Shell core executor: the genuinely executable backend that sends one
      * command string through the packaged Rust language core whenever its bridge
      * is READY. It calls only the [AnShellCoreBridge] facade, never JNI directly.
@@ -130,6 +148,15 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
     /** Outcome of the most recent bootstrap attempt; null until one completes. */
     @Volatile
     var nativeBootstrapResult: NativeRuntimeResult? = null
+        private set
+
+    /**
+     * Outcome of the most recent base-userspace bootstrap attempt; null until one
+     * completes. Read-only for diagnostics; published by each initialization
+     * attempt from the genuine [BaseUserspaceBootstrap] result.
+     */
+    @Volatile
+    var userspaceBootstrapResult: BaseUserspaceResult? = null
         private set
 
     /**
@@ -258,10 +285,74 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
         }
         if (!currentCoroutineContext().isActive) return
 
-        // The Shell gate is decided ONLY by genuine bridge verification - the one
-        // authoritative readiness path. Never by the bootstrap above.
+        // Base userspace bootstrap (Part 27-R): install/verify the bundled,
+        // versioned base artifact. Independent of the C++ axis above and of the
+        // AN Shell core below; it executes nothing. The Shell gate is NOT allowed
+        // to reach READY until this is genuinely installed and verified, so a
+        // failed bootstrap publishes a FAILED gate with a truthful reason and the
+        // existing retry mechanism re-attempts it.
+        runBaseUserspaceBootstrap()
+        if (!currentCoroutineContext().isActive) return
+        val userspaceCheck = baseUserspace.installedCheck()
+        if (!userspaceCheck.ready) {
+            Log.w(TAG, "Base userspace not ready; Shell gate FAILED: ${userspaceCheck.reason}")
+            _shellBackendState.value = ShellBackendState.failed(userSafeUserspaceReason(userspaceCheck))
+            return
+        }
+
+        // The Shell gate is decided by genuine bridge verification - the one
+        // authoritative readiness path for the AN Shell core - AND the verified
+        // base userspace above. READY is published only when both hold.
         verifyAnShellCoreBridge()
         publishShellBackendGate()
+    }
+
+    /**
+     * Runs one real base-userspace bootstrap attempt and records the genuine
+     * [BaseUserspaceResult]. An unexpected throw is captured into a
+     * [BaseUserspaceResult.Failed] (never thrown into the caller's coroutine);
+     * the Shell gate is not allowed to reach READY until [baseUserspace] reports
+     * the installed tree genuinely ready.
+     */
+    private fun runBaseUserspaceBootstrap() {
+        userspaceBootstrapResult = try {
+            baseUserspace.run()
+        } catch (error: Throwable) {
+            Log.e(TAG, "Base userspace bootstrap threw: ${error.message ?: error::class.simpleName}")
+            BaseUserspaceResult.Failed(
+                version = BaseUserspaceArtifact.VERSION,
+                root = baseUserspace.installedUserspaceRoot,
+                message = "base userspace bootstrap threw: ${error.message ?: error::class.simpleName}",
+            )
+        }
+        val outcome = userspaceBootstrapResult
+        if (outcome is BaseUserspaceResult.Ready) {
+            Log.i(
+                TAG,
+                "Base userspace ${if (outcome.justInstalled) "installed" else "verified"} " +
+                    "(version ${outcome.version}) at ${outcome.root.path}",
+            )
+        } else if (outcome is BaseUserspaceResult.Failed) {
+            Log.e(TAG, "Base userspace not ready: ${outcome.message}")
+        }
+    }
+
+    /**
+     * Renders a base-userspace readiness shortfall as a plain, user-safe reason
+     * for the Shell gate. The precise diagnostic detail stays in logs and the
+     * [BaseUserspaceInstalledCheck] fields; the gate carries the explanation the
+     * UI can show next to Retry.
+     */
+    private fun userSafeUserspaceReason(check: BaseUserspaceInstalledCheck): String = when {
+        check.metadataState != BaseUserspaceBootstrapState.INSTALLED ->
+            "The AliasNull base userspace has not been installed successfully."
+        check.missingFiles.isNotEmpty() ->
+            "The AliasNull base userspace is missing required files."
+        check.mismatchedFiles.isNotEmpty() ->
+            "The AliasNull base userspace failed integrity verification."
+        !check.versionMatches || !check.archMatches ->
+            "The installed AliasNull base userspace does not match this build."
+        else -> "The AliasNull base userspace is not ready."
     }
 
     override fun shutdown() {
@@ -393,17 +484,23 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
     }
 
     /**
-     * Publishes the Shell gate from the single authoritative readiness path:
-     * [AnShellCoreBridge.currentStatus] surfaced through [backendAvailability].
-     * READY exactly when that availability can execute; otherwise FAILED with a
-     * user-safe reason. Called only after a real [verifyAnShellCoreBridge]
-     * attempt, so the value always reflects a genuine verification outcome.
+     * Publishes the Shell gate from the two authoritative readiness facts:
+     * the AN Shell core bridge ([AnShellCoreBridge.currentStatus] surfaced
+     * through [backendAvailability]) AND the verified AliasNull base userspace
+     * ([BaseUserspaceBootstrap.installedCheck]). READY exactly when the core can
+     * execute AND the base userspace is installed and verified; otherwise FAILED
+     * with the user-safe reason for whichever prerequisite is not met. Called only
+     * after real attempts, so the value always reflects genuine outcomes.
      */
     private fun publishShellBackendGate() {
         val availability = backendAvailability(ExecutionBackend.AN_SHELL_CORE)
+        val coreReady = availability.canExecute
+        val userspaceCheck = baseUserspace.installedCheck()
         _shellBackendState.value =
-            if (availability.canExecute) {
+            if (coreReady && userspaceCheck.ready) {
                 ShellBackendState.READY
+            } else if (!userspaceCheck.ready) {
+                ShellBackendState.failed(userSafeUserspaceReason(userspaceCheck))
             } else {
                 ShellBackendState.failed(userSafeBridgeReason(anShellCoreBridgeStatus))
             }
@@ -440,18 +537,30 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
 
     /**
      * Part 27-Q controlled native-process self-check. Never attempts execution
-     * unless the native runtime is genuinely loaded and bootstrapped; otherwise it
-     * returns [NativeProcessTestResult.NotReady] and no child is launched. The
-     * authorized request comes from [NativeProcessTestKind.request] (built from the
-     * policy's canonical invocations) and runs through [NativeProcessExecutionSeam]
-     * on the background dispatcher - this is the only place the diagnostic reaches
-     * the real runner, so [NativeExecutionPolicy] stays authoritative.
+     * unless the native runtime is genuinely loaded and bootstrapped AND the
+     * AliasNull base userspace is installed and verified; otherwise it returns
+     * [NativeProcessTestResult.NotReady] and no child is launched, so the panel
+     * reflects the full runtime readiness requirement (Part 27-R) rather than
+     * the native runner alone. The authorized request comes from
+     * [NativeProcessTestKind.request] (built from the policy's canonical
+     * invocations) and runs through [NativeProcessExecutionSeam] on the
+     * background dispatcher - this is the only place the diagnostic reaches the
+     * real runner, so [NativeExecutionPolicy] stays authoritative.
      */
     override suspend fun runNativeProcessTest(case: NativeProcessTestKind): NativeProcessTestResult {
         if (!nativeRuntime.isNativeLibraryLoaded || !nativeRuntime.isNativeBootstrapActive) {
             return NativeProcessTestResult.NotReady(
                 kind = case,
                 message = notReadyReason(),
+            )
+        }
+        val userspaceCheck = baseUserspace.installedCheck()
+        if (!userspaceCheck.ready) {
+            return NativeProcessTestResult.NotReady(
+                kind = case,
+                message = "The native runtime is loaded but the AliasNull base userspace is not " +
+                    "ready (${userSafeUserspaceReason(userspaceCheck)}) " +
+                    "no controlled native process was run.",
             )
         }
         val execution = NativeProcessExecutionSeam.execute(case.request(), nativeRuntime, Dispatchers.Default)
