@@ -49,12 +49,14 @@ data class AnShellCoreBridgeStatus(
  * the payload with [AnShellCorePayloadCodec]. It hides every JNI name and raw
  * byte[] from its callers.
  *
- * Deliberate scope: this is a language-core bridge, NOT a command backend. It is
- * not a ShellCommandExecutor, is not registered with the execution router, and
- * AUTO never routes a command to it; the temporary frontend executor remains the
- * only command path. Nothing in the UI or a ViewModel calls this object -- the
- * runtime layer may probe it observationally (see AliasNullRuntimeManager), and
- * nothing sends a user-typed command through it yet.
+ * Deliberate scope: this is a language-core bridge, not itself a command
+ * backend. It is not a ShellCommandExecutor and is not registered with the
+ * execution router. The genuinely executable backend that calls [execute] is
+ * [AnShellCoreCommandExecutor] (see that class); it is registered with the
+ * router and is what AUTO prefers once this bridge is READY, falling back to the
+ * temporary frontend executor until then. The runtime manager may also probe
+ * this object observationally (see AliasNullRuntimeManager); nothing in the UI
+ * or a ViewModel calls this object directly.
  *
  * The handshake value expected here must stay in lock-step with the Rust
  * constant `aliasnull_an_shell_core_api_version()`; 0.1.0 is 0x0000_0100.
