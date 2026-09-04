@@ -20,10 +20,18 @@ data class BaseUserspaceTreeValidation(
     val archMarker: String? = null,
     val versionMatches: Boolean = false,
     val archMatches: Boolean = false,
+    /**
+     * A short reason the bundled executable is invalid (missing permission,
+     * wrong format, a symlink instead of a regular file), or null when it is
+     * valid or no executable was expected. Set only when [executableRelative]
+     * was passed to [validateInstalledTree]; readiness must not depend on the
+     * executable merely existing.
+     */
+    val executableError: String? = null,
 ) {
     val valid: Boolean
         get() = missingFiles.isEmpty() && mismatchedFiles.isEmpty() &&
-            versionMatches && archMatches
+            versionMatches && archMatches && executableError == null
 }
 
 /**
@@ -77,6 +85,7 @@ object BaseUserspaceFiles {
         expectedArch: String,
         versionFile: String = BaseUserspaceArtifact.VERSION_FILE,
         archFile: String = BaseUserspaceArtifact.ARCH_FILE,
+        executableRelative: String? = null,
     ): BaseUserspaceTreeValidation {
         val missing = mutableListOf<String>()
         val mismatched = mutableListOf<String>()
@@ -95,6 +104,7 @@ object BaseUserspaceFiles {
                 mismatched += relative
             }
         }
+        val executableError = executableRelative?.let { executableValidationError(root, it) }
         return BaseUserspaceTreeValidation(
             missingFiles = missing,
             mismatchedFiles = mismatched,
@@ -102,6 +112,7 @@ object BaseUserspaceFiles {
             archMarker = readTextFile(File(root, archFile)),
             versionMatches = readTextFile(File(root, versionFile)) == expectedVersion,
             archMatches = readTextFile(File(root, archFile)) == expectedArch,
+            executableError = executableError,
         )
     }
 
@@ -112,4 +123,64 @@ object BaseUserspaceFiles {
     /** Reads [file] as trimmed UTF-8 text, or null when absent/unreadable. */
     fun readTextFile(file: File): String? =
         readBytes(file)?.toString(Charsets.UTF_8)?.trim()
+
+    // ---- Executable support (Part 27-S2) ----
+
+    /**
+     * Restores a narrow, deliberate executable permission on [file] after asset
+     * extraction (APK assets do not reliably preserve Unix mode bits): owner may
+     * read/write/execute, group/other are never made writable. Returns true only
+     * when the resulting file is executable by the owner. chmod is not a
+     * substitute for integrity: callers still digest- and format-verify the file.
+     */
+    fun applyExecutableOwnerMode(file: File): Boolean = runCatching {
+        file.setWritable(false, false) &&
+            file.setWritable(true, true) &&
+            file.setReadable(true, true) &&
+            file.setExecutable(true, true)
+    }.getOrDefault(false)
+
+    /** True only when [file]'s bytes are an ELF of class 64-bit little-endian. */
+    fun isElf64(bytes: ByteArray): Boolean {
+        if (bytes.size < ELF_HEADER_MIN) return false
+        if (bytes[0] != 0x7f.toByte() || bytes[1] != 'E'.code.toByte() ||
+            bytes[2] != 'L'.code.toByte() || bytes[3] != 'F'.code.toByte()
+        ) {
+            return false
+        }
+        // e_ident[EI_CLASS]=2 -> ELFCLASS64; e_ident[EI_DATA]=1 -> little-endian.
+        if (bytes[4] != 2.toByte() || bytes[5] != 1.toByte()) return false
+        return true
+    }
+
+    /** True only when [file] is a 64-bit ELF whose e_machine is AArch64 (0xB7). */
+    fun isElf64AArch64(file: File): Boolean {
+        val bytes = readBytes(file) ?: return false
+        if (!isElf64(bytes)) return false
+        // ELF64 header: e_machine is the 2-byte little-endian value at offset 18.
+        val machine = ((bytes[19].toInt() and 0xff) shl 8) or (bytes[18].toInt() and 0xff)
+        return machine == EM_AARCH64
+    }
+
+    /**
+     * Validates [relative] under [root] as the installed bundled executable.
+     * Returns null when it is a regular (non-symlink) file with execute
+     * permission and a 64-bit AArch64 ELF payload, otherwise a short reason.
+     * This is the "verify the executable itself" rule: readiness never depends on
+     * the file merely existing.
+     */
+    fun executableValidationError(root: File, relative: String): String? {
+        if (!isSafeRelativePath(relative)) return "unsafe relative path '$relative'"
+        val file = File(root, relative)
+        val symlink = runCatching {
+            java.nio.file.Files.isSymbolicLink(file.toPath())
+        }.getOrDefault(false)
+        if (symlink || !file.isFile) return "not a regular file"
+        if (!file.canExecute()) return "missing execute permission"
+        if (!isElf64AArch64(file)) return "not a 64-bit AArch64 ELF"
+        return null
+    }
+
+    private const val ELF_HEADER_MIN = 20
+    private const val EM_AARCH64 = 0xB7
 }

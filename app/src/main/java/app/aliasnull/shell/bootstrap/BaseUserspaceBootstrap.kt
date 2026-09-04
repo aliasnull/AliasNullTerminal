@@ -47,10 +47,12 @@ data class BaseUserspaceInstalledCheck(
     val archMatches: Boolean,
     val missingFiles: List<String>,
     val mismatchedFiles: List<String>,
+    /** Reason the bundled executable is invalid, or null when it is valid. */
+    val executableError: String? = null,
 ) {
     val ready: Boolean
         get() = metadataState == BaseUserspaceBootstrapState.INSTALLED &&
-            treeValid && versionMatches && archMatches
+            treeValid && versionMatches && archMatches && executableError == null
 
     val reason: String
         get() = when {
@@ -60,6 +62,8 @@ data class BaseUserspaceInstalledCheck(
                 "base userspace is missing ${missingFiles.size} required file(s)"
             mismatchedFiles.isNotEmpty() ->
                 "base userspace has ${mismatchedFiles.size} file(s) failing integrity"
+            executableError != null ->
+                "the base userspace executable is invalid: $executableError"
             !versionMatches ->
                 "installed base userspace version ($versionMarker) does not match this build"
             !archMatches ->
@@ -132,12 +136,7 @@ class BaseUserspaceBootstrap(
      */
     fun installedCheck(): BaseUserspaceInstalledCheck {
         val metadata = currentMetadata()
-        val validation = BaseUserspaceFiles.validateInstalledTree(
-            root = installedUserspaceRoot,
-            manifest = BaseUserspaceArtifact.FILES,
-            expectedVersion = BaseUserspaceArtifact.VERSION,
-            expectedArch = BaseUserspaceArtifact.ARCH,
-        )
+        val validation = validateInstalledTree()
         return BaseUserspaceInstalledCheck(
             metadataState = metadata.state,
             metadataVersion = metadata.artifactVersion,
@@ -148,6 +147,7 @@ class BaseUserspaceBootstrap(
             archMatches = validation.archMatches,
             missingFiles = validation.missingFiles,
             mismatchedFiles = validation.mismatchedFiles,
+            executableError = validation.executableError,
         )
     }
 
@@ -201,14 +201,15 @@ class BaseUserspaceBootstrap(
                 if (BaseUserspaceFiles.digestHex(bytes) != expected) {
                     return failWithMetadata("bundled artifact file failed its digest: '$relative'")
                 }
-                File(stagingDir, relative).writeBytes(bytes)
+                val target = File(stagingDir, relative)
+                target.writeBytes(bytes)
+                if (BaseUserspaceArtifact.isExecutableFile(relative) &&
+                    !BaseUserspaceFiles.applyExecutableOwnerMode(target)
+                ) {
+                    return failWithMetadata("could not set the executable permission on '$relative'")
+                }
             }
-            val staged = BaseUserspaceFiles.validateInstalledTree(
-                root = stagingDir,
-                manifest = BaseUserspaceArtifact.FILES,
-                expectedVersion = BaseUserspaceArtifact.VERSION,
-                expectedArch = BaseUserspaceArtifact.ARCH,
-            )
+            val staged = validateInstalledTree(stagingDir)
             if (!staged.valid) {
                 return failWithMetadata("staged base userspace failed validation")
             }
@@ -230,12 +231,7 @@ class BaseUserspaceBootstrap(
             }
             wipe(backupDir)
 
-            val final = BaseUserspaceFiles.validateInstalledTree(
-                root = installedUserspaceRoot,
-                manifest = BaseUserspaceArtifact.FILES,
-                expectedVersion = BaseUserspaceArtifact.VERSION,
-                expectedArch = BaseUserspaceArtifact.ARCH,
-            )
+            val final = validateInstalledTree(installedUserspaceRoot)
             if (!final.valid) {
                 return failWithMetadata("installed base userspace failed final validation")
             }
@@ -252,6 +248,21 @@ class BaseUserspaceBootstrap(
     }
 
     // ---- Helpers ----
+
+    /**
+     * Validates [root] as an installed/staged base tree against the authoritative
+     * manifest, including the bundled executable's permission and 64-bit AArch64
+     * ELF format. Every install and reuse decision consults this same check, so
+     * readiness can never depend on the executable merely existing.
+     */
+    private fun validateInstalledTree(root: File): BaseUserspaceTreeValidation =
+        BaseUserspaceFiles.validateInstalledTree(
+            root = root,
+            manifest = BaseUserspaceArtifact.FILES,
+            expectedVersion = BaseUserspaceArtifact.VERSION,
+            expectedArch = BaseUserspaceArtifact.ARCH,
+            executableRelative = BaseUserspaceArtifact.EXECUTABLE_FILE,
+        )
 
     private fun ready(justInstalled: Boolean): BaseUserspaceResult =
         BaseUserspaceResult.Ready(BaseUserspaceArtifact.VERSION, installedUserspaceRoot, justInstalled)

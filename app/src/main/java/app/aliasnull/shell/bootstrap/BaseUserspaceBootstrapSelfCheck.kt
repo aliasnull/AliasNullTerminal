@@ -62,6 +62,13 @@ internal object BaseUserspaceBootstrapSelfCheck {
             failedStateRepaired(application, scratchRoot),
             // 10. Every install write stays inside the intended userspace root.
             containment(application, scratchRoot),
+            // Part 27-S2: the bundled executable is present, verified as a real
+            // 64-bit AArch64 ELF with execute permission, and any missing,
+            // corrupted or permission-broken executable is detected and repaired.
+            executableInstalledAndValid(application, scratchRoot),
+            executableMissingRepaired(application, scratchRoot),
+            executableCorruptedRepaired(application, scratchRoot),
+            executablePermissionRepaired(application, scratchRoot),
         )
     }
 
@@ -205,6 +212,77 @@ internal object BaseUserspaceBootstrapSelfCheck {
             "every install write stays inside the userspace root",
             passed,
             "files=${installed.listFiles()?.size} under ${installed.path}",
+        )
+    }
+
+    // ---- Part 27-S2 executable checks ----
+
+    private fun executableInstalledAndValid(application: Application, scratchRoot: File): BaseUserspaceSelfCheckCase {
+        val root = scratch(scratchRoot, "exec-installed")
+        val bootstrap = freshBootstrap(application, root, "exec-installed")
+        bootstrap.run()
+        val relative = BaseUserspaceArtifact.EXECUTABLE_FILE
+        val exe = File(bootstrap.installedUserspaceRoot, relative)
+        val error = BaseUserspaceFiles.executableValidationError(bootstrap.installedUserspaceRoot, relative)
+        val shaOk = BaseUserspaceFiles.sha256Of(exe) == BaseUserspaceArtifact.FILES[relative]
+        val check = bootstrap.installedCheck()
+        val passed = check.ready && exe.isFile && exe.canExecute() && error == null && shaOk
+        return case(
+            "fresh install contains a valid 64-bit AArch64 executable (Part 27-S2)",
+            passed,
+            "ready=${check.ready} executableError=$error shaOk=$shaOk",
+        )
+    }
+
+    private fun executableMissingRepaired(application: Application, scratchRoot: File): BaseUserspaceSelfCheckCase {
+        val root = scratch(scratchRoot, "exec-missing")
+        val bootstrap = freshBootstrap(application, root, "exec-missing")
+        bootstrap.run()
+        val exe = File(bootstrap.installedUserspaceRoot, BaseUserspaceArtifact.EXECUTABLE_FILE)
+        exe.delete()
+        val before = bootstrap.installedCheck()
+        val run = bootstrap.run()
+        val passed = !before.ready && run is BaseUserspaceResult.Ready && bootstrap.installedCheck().ready
+        return case(
+            "a missing executable invalidates readiness and is reinstalled",
+            passed,
+            "before.ready=${before.ready} missing=${before.missingFiles} " +
+                "after.ready=${bootstrap.installedCheck().ready}",
+        )
+    }
+
+    private fun executableCorruptedRepaired(application: Application, scratchRoot: File): BaseUserspaceSelfCheckCase {
+        val root = scratch(scratchRoot, "exec-corrupt")
+        val bootstrap = freshBootstrap(application, root, "exec-corrupt")
+        bootstrap.run()
+        val exe = File(bootstrap.installedUserspaceRoot, BaseUserspaceArtifact.EXECUTABLE_FILE)
+        val size = exe.length().toInt()
+        if (size > 0) exe.writeBytes(ByteArray(size) { (it % 251).toByte() })
+        val before = bootstrap.installedCheck()
+        val run = bootstrap.run()
+        val passed = !before.ready && run is BaseUserspaceResult.Ready && bootstrap.installedCheck().ready
+        return case(
+            "corrupted executable content is detected and reinstalled",
+            passed,
+            "before.ready=${before.ready} mismatched=${before.mismatchedFiles} " +
+                "after.ready=${bootstrap.installedCheck().ready}",
+        )
+    }
+
+    private fun executablePermissionRepaired(application: Application, scratchRoot: File): BaseUserspaceSelfCheckCase {
+        val root = scratch(scratchRoot, "exec-perm")
+        val bootstrap = freshBootstrap(application, root, "exec-perm")
+        bootstrap.run()
+        val exe = File(bootstrap.installedUserspaceRoot, BaseUserspaceArtifact.EXECUTABLE_FILE)
+        exe.setExecutable(false)
+        val before = bootstrap.installedCheck()
+        val run = bootstrap.run()
+        val passed = !before.ready && run is BaseUserspaceResult.Ready && bootstrap.installedCheck().ready
+        return case(
+            "a broken executable permission is detected and repaired",
+            passed,
+            "before.ready=${before.ready} executableError=${before.executableError} " +
+                "after.ready=${bootstrap.installedCheck().ready}",
         )
     }
 

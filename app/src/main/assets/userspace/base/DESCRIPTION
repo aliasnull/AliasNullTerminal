@@ -1,25 +1,34 @@
 AliasNull base userspace - versioned foundation artifact.
 
-This is the first real, versioned AliasNull base-userspace artifact (Part 27-R).
-It is NOT a Linux filesystem, a rootfs image, or a set of system tools. It is a
-minimal, honest, self-identifying foundation that AliasNull installs into its
-private runtime directory and verifies before the runtime reports ready.
+This is the first real, versioned AliasNull base-userspace artifact (Part 27-R,
+extended by Part 27-S2). It is NOT a Linux filesystem, a rootfs image, a shell,
+a package manager, or a set of system tools. It is a minimal, honest,
+self-identifying foundation that AliasNull installs into its private runtime
+directory and verifies before the runtime reports ready.
 
-It intentionally contains NO executables. No arm64 tool that is genuinely
-required for the base runtime can yet be produced reproducibly from this
-repository, so none is bundled or faked. Future userland tools (a package
-manager, Python, Git, and other optional packages) will be real, separately
-produced arm64 components installed on top of this foundation as a later
-milestone; this artifact only establishes the versioned base they build upon.
+Since Part 27-S2 the artifact contains ONE real, source-built arm64 executable,
+aliasnull_base_probe: the first genuine executable component of the AliasNull
+base userspace. It is a small Android AArch64 PIE built from this repository
+(app/src/main/cpp/aliasnull_base_probe.cpp) with the Android NDK, bundled as an
+APK asset, and verified (SHA-256, 64-bit AArch64 ELF, executable permission)
+before the runtime reports ready. It prints "AliasNull base userspace OK" and
+exits 0. It is NOT a shell, NOT a general command runner, and NOT a Linux
+userspace: AliasNull does not yet include Python, Git, a package manager, or
+arbitrary command execution, and unknown Shell commands stay unknown. The
+executable is exercised only through the controlled developer-diagnostic native
+runtime test panel, never through the Shell command surface.
 
-Contents (all files are original AliasNull-authored metadata/documentation):
-  VERSION           - the base artifact version (single source of truth)
-  ARCH              - the target architecture this build is produced for
-  DESCRIPTION       - this description
-  PROVENANCE.txt    - provenance and scope of every file in the artifact
-  LICENSE.txt       - licensing note for the artifact files
+Contents of this artifact:
+  VERSION              - the base artifact version (single source of truth)
+  ARCH                 - the target architecture this build is produced for
+  DESCRIPTION          - this description
+  PROVENANCE.txt       - provenance and scope of every file in the artifact
+  LICENSE.txt          - licensing note for the artifact files
+  aliasnull_base_probe - the bundled 64-bit AArch64 base-userspace executable
 
 Version:   see VERSION
 Arch:      see ARCH
-Produced:  deterministically from the AliasNull repository (app/src/main/assets/
-           userspace/base) and shipped inside the signed APK.
+Produced:  from the AliasNull repository and shipped inside the signed APK. The
+           executable is built from committed source by CI with the Android NDK
+           (see PROVENANCE.txt); its expected SHA-256 is recorded in the
+           base-userspace artifact manifest and is not silently hard-coded.

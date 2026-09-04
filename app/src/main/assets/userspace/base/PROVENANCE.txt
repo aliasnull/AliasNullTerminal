@@ -1,4 +1,4 @@
-AliasNull base userspace artifact - provenance and scope (Part 27-R)
+AliasNull base userspace artifact - provenance and scope (Part 27-R, Part 27-S2)
 
 Scope of this artifact
 ----------------------
@@ -10,18 +10,35 @@ shell, not a command backend, not a native runtime, and not a Linux rootfs.
 
 Provenance of every file
 ------------------------
-All files in this artifact (VERSION, ARCH, DESCRIPTION, PROVENANCE.txt,
-LICENSE.txt) are original AliasNull-authored documentation/metadata. None is a
-binary, an executable, a third-party component, or a copy of a host/system
-file. Each file's origin is therefore the AliasNull repository itself:
+The documentation/metadata files (VERSION, ARCH, DESCRIPTION, PROVENANCE.txt,
+LICENSE.txt) are original AliasNull-authored files produced from the AliasNull
+repository and bundled verbatim into the signed APK.
 
-  - Source project:  AliasNull (app/src/main/assets/userspace/base)
-  - Build method:    bundled verbatim into the signed APK as a plain asset; no
-                     transformation, no compilation, no download.
-  - Target arch:     arm64-v8a (see ARCH). These are plain-text files, so the
-                     architecture marker records the ABI this build is produced
-                     for rather than any machine code property.
-  - License:         see LICENSE.txt.
+aliasnull_base_probe is the first real executable component of the AliasNull
+base userspace (Part 27-S2). Its provenance:
+
+  - Component:      aliasnull_base_probe
+  - Executable ver: 1
+  - Source file:    app/src/main/cpp/aliasnull_base_probe.cpp
+  - Source project: AliasNull (this repository)
+  - Build system:   CMake + Android NDK android.toolchain.cmake
+  - Toolchain NDK:  28.2.13676358 (NDK r28c)
+  - Target ABI:     arm64-v8a (AArch64, 64-bit)
+  - Android API:    26 (PIE executable, interpreter /system/bin/linker64)
+  - Output:         prints "AliasNull base userspace OK\n" and exits 0
+  - Nature:         a normal executable; never a JNI library, never loaded with
+                    System.loadLibrary, and never part of libaliasnull_runtime.so
+  - License:        AliasNull project source terms (see LICENSE.txt)
+
+The executable shipped in the APK is the exact artifact produced by the
+"Build AliasNull Android" CI workflow from the committed source above. Its
+source revision, CI run id and workflow, and its expected SHA-256 are recorded
+in the base-userspace artifact manifest (app/src/main/java/app/aliasnull/shell/
+bootstrap/BaseUserspaceArtifact.kt), which is the single source of truth for
+that digest - it is not silently hard-coded. CI fails if a fresh rebuild of the
+committed source does not reproduce the committed bytes, and the bootstrap
+verifies the digest, the 64-bit AArch64 ELF format and the executable
+permission before it reports the base userspace installed.
 
 Why each file is required
 -------------------------
@@ -35,15 +52,20 @@ Why each file is required
   PROVENANCE.txt - this file: traceable provenance per component, as required
                    for any component shipped in the base artifact.
   LICENSE.txt    - licensing note.
+  aliasnull_base_probe - the real 64-bit AArch64 base-userspace executable,
+                   exercised through the controlled developer-diagnostic test
+                   panel, never through the Shell command surface.
 
 No Android /system binaries are part of this artifact. The controlled native
-runtime tests (Echo/Stderr/Non-zero Exit/Launch Failure) still execute Android
-host binaries strictly internally for diagnostics; those are NOT AliasNull
-userspace and are deliberately not routed to it.
+runtime tests (Echo/Stderr/Non-zero Exit/Launch Failure/Base Executable) run
+strictly internally for diagnostics; those host probes and this bundled
+executable are not general Shell commands.
 
 Honest limitation
 -----------------
-No real arm64 userland executables are bundled here yet: none that is genuinely
-required for the base runtime can currently be produced reproducibly for
-arm64-v8a from this repository, and the phase rules forbid a fake substitute.
-Real tools are a later milestone layered on this foundation.
+This artifact deliberately contains exactly one executable and no shell, no
+general command runner, and no Linux userland. Python, Git, a package manager,
+and arbitrary command execution are NOT included; the AliasNull Shell still
+answers only its existing vocabulary (help/about/clear/echo) and reports unknown
+commands as unknown. Later milestones layer real, separately produced arm64
+components on this verified base.

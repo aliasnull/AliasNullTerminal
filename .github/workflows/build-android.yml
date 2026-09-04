@@ -92,12 +92,47 @@ jobs:
             && echo "OK: existing native runtime still packaged" \
             || echo "WARN: libaliasnull_runtime.so not found (native disabled?)"
 
-      # ---- Part 27-S1: CI arm64 base-userspace artifact pipeline ----
+      # ---- Part 27-S2: the APK must ship the base-userspace asset bundle ----
+      # The base-userspace files are APK assets under assets/userspace/base/. The
+      # executable must be present in the built APK, must still be the 64-bit
+      # AArch64 ELF, and its bytes inside the APK must hash to the same
+      # BASE_EXECUTABLE_SHA256 constant. CI fails if the executable is missing
+      # from the APK or its bytes inside the APK differ from the manifest.
+      - name: Verify the base userspace asset bundle is packaged in the APK
+        run: |
+          APK="$(find app/build/outputs/apk -name '*.apk' | head -n1)"
+          test -n "$APK" || { echo "FAIL: No APK produced"; exit 1; }
+          MANIFEST="app/src/main/java/app/aliasnull/shell/bootstrap/BaseUserspaceArtifact.kt"
+          CONST="$(grep -A1 'BASE_EXECUTABLE_SHA256' "$MANIFEST" | grep -oE '[0-9a-f]{64}' | head -n1)"
+          test -n "$CONST" || { echo "FAIL: BASE_EXECUTABLE_SHA256 constant not found in $MANIFEST"; exit 1; }
+          for entry in aliasnull_base_probe VERSION ARCH DESCRIPTION PROVENANCE.txt LICENSE.txt; do
+            unzip -l "$APK" | grep -q "assets/userspace/base/$entry" \
+              || { echo "FAIL: assets/userspace/base/$entry missing from APK"; exit 1; }
+          done
+          unzip -l "$APK" | grep 'assets/userspace/base/aliasnull_base_probe' || { echo "FAIL: base executable missing"; exit 1; }
+          TMP="$(mktemp -d)"
+          unzip -p "$APK" assets/userspace/base/aliasnull_base_probe > "$TMP/aliasnull_base_probe"
+          IN_APK_SHA="$(sha256sum "$TMP/aliasnull_base_probe" | awk '{print $1}')"
+          echo "asset in APK:  $IN_APK_SHA"
+          echo "manifest const: $CONST"
+          test "$IN_APK_SHA" = "$CONST" \
+            || { echo "FAIL: the base executable bytes inside the APK do not match the manifest constant (Part 27-S2)"; exit 1; }
+          file "$TMP/aliasnull_base_probe"
+          file "$TMP/aliasnull_base_probe" | grep -q "ELF 64-bit" || { echo "FAIL: in-APK asset is not a 64-bit ELF"; exit 1; }
+          file "$TMP/aliasnull_base_probe" | grep -q "ARM aarch64" || { echo "FAIL: in-APK asset is not ARM AArch64"; exit 1; }
+          rm -rf "$TMP"
+          echo "OK: base-userspace asset bundle (including the executable) is packaged in the APK and matches the manifest constant"
+
+      # ---- Part 27-S1/S2: CI arm64 base-userspace artifact pipeline ----
       # Builds the AliasNull base-userspace probe executable (a real AArch64 ELF
       # PIE) standalone from the same NDK 28.2 / CMake 3.22.1 toolchain the APK
-      # uses, validates it, hashes it, and uploads it as a proof artifact. It is
-      # intentionally NOT added to the APK or the base-userspace asset bundle
-      # yet: integration happens only after CI + device verification.
+      # uses, validates it, hashes it, and uploads it as a proof artifact. The
+      # SAME binary is the committed asset app/src/main/assets/userspace/base/
+      # aliasnull_base_probe (Part 27-S2): the step below that recomputes its
+      # SHA-256 must equal the committed asset AND the BASE_EXECUTABLE_SHA256
+      # Kotlin manifest constant, so a rebuild of the current source tree is
+      # proven byte-identical to what ships. That equality is verified by the
+      # "reproduces the committed asset" step below and CI fails on any mismatch.
       - name: Build AliasNull base userspace probe executable (arm64-v8a)
         run: |
           export ANDROID_NDK_HOME="${ANDROID_SDK_ROOT}/ndk/28.2.13676358"
@@ -130,6 +165,36 @@ jobs:
           BIN="build/userspace-probe/aliasnull_base_probe"
           sha256sum "$BIN" | tee build/userspace-probe/aliasnull_base_probe.sha256
           test -s build/userspace-probe/aliasnull_base_probe.sha256 || { echo "FAIL: SHA-256 not generated"; exit 1; }
+
+      # ---- Part 27-S2: the committed asset must be the reproducible binary ----
+      # The standalone build above re-derives the probe from the CURRENT source
+      # tree. CI must prove that the committed APK asset
+      # (app/src/main/assets/userspace/base/aliasnull_base_probe) is exactly what
+      # a fresh build produces, and that the BASE_EXECUTABLE_SHA256 manifest
+      # constant is that same hash. Any mismatch (asset drifted from source, or
+      # the manifest constant no longer describes the shipped binary) fails CI.
+      - name: Verify the committed asset reproduces the fresh build and matches the manifest constant
+        run: |
+          FRESH="build/userspace-probe/aliasnull_base_probe"
+          COMMITTED="app/src/main/assets/userspace/base/aliasnull_base_probe"
+          MANIFEST="app/src/main/java/app/aliasnull/shell/bootstrap/BaseUserspaceArtifact.kt"
+          CONST="$(grep -A1 'BASE_EXECUTABLE_SHA256' "$MANIFEST" | grep -oE '[0-9a-f]{64}' | head -n1)"
+          test -n "$CONST" || { echo "FAIL: BASE_EXECUTABLE_SHA256 constant not found in $MANIFEST"; exit 1; }
+          test -f "$COMMITTED" || { echo "FAIL: committed asset $COMMITTED is missing"; exit 1; }
+          FRESH_SHA="$(sha256sum "$FRESH" | awk '{print $1}')"
+          COMMITTED_SHA="$(sha256sum "$COMMITTED" | awk '{print $1}')"
+          echo "fresh build:     $FRESH_SHA"
+          echo "committed asset: $COMMITTED_SHA"
+          echo "manifest const:  $CONST"
+          test "$FRESH_SHA" = "$COMMITTED_SHA" \
+            || { echo "FAIL: a fresh build of the probe does not byte-match the committed asset (Part 27-S2)"; exit 1; }
+          test "$FRESH_SHA" = "$CONST" \
+            || { echo "FAIL: the probe hash does not match the BASE_EXECUTABLE_SHA256 manifest constant (Part 27-S2)"; exit 1; }
+          file "$COMMITTED"
+          file "$COMMITTED" | grep -q "ELF 64-bit" || { echo "FAIL: committed asset is not a 64-bit ELF"; exit 1; }
+          file "$COMMITTED" | grep -q "ARM aarch64" || { echo "FAIL: committed asset is not ARM AArch64"; exit 1; }
+          readelf -h "$COMMITTED" | grep -q "Machine:.*AArch64" || { echo "FAIL: committed asset machine is not AArch64"; exit 1; }
+          echo "OK: committed base-userspace executable reproduces the fresh build and matches the manifest constant"
 
       - name: Generate provenance metadata
         run: |

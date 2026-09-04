@@ -1,6 +1,8 @@
 package app.aliasnull.shell.runtime
 
+import app.aliasnull.shell.bootstrap.BaseUserspaceArtifact
 import app.aliasnull.shell.runtime.native.NativeProcessRequest
+import java.io.File
 
 /**
  * Stable, machine-readable reason a structured native-execution request was
@@ -63,6 +65,16 @@ sealed interface NativeExecutionPolicyDecision {
  * extend the allowlist deliberately; no arbitrary user-entered argv is ever
  * permitted, and in particular nothing routes AN Shell unknown commands here.
  *
+ * The bundled AliasNull base-userspace executable is NOT part of that static
+ * list, because its argv[0] is the runtime install path, which is only known
+ * after the base bootstrap runs. It is instead a single path-pinned allowance:
+ * [baseExecutableInvocation] builds its exact argv from the verified base
+ * directory, and [decideBaseExecutable] allows ONLY that one bare argv for ONLY
+ * the bundled [BaseUserspaceArtifact.EXECUTABLE_FILE] when the caller supplies
+ * the verified installed executable. The runtime derives that path from the
+ * verified base-userspace bootstrap - never from UI input - so no other
+ * executable path or argument list can ever be selected through this seam.
+ *
  * An allowlisted argv must run exactly as listed: requests carrying a working
  * directory, environment overrides or a stdin payload are rejected even when
  * the argv matches, so no behaviour can be smuggled in beside the argv.
@@ -83,6 +95,14 @@ object NativeExecutionPolicy {
     const val SELFCHECK_MISSING_BINARY = "/system/bin/aliasnull-p27-no-such-selfcheck-binary"
 
     /**
+     * The bundled base-userspace executable's deterministic single-line stdout
+     * (Part 27-S2). This is the exact string the source-built
+     * `aliasnull_base_probe` writes before exiting 0, so a real child process
+     * genuinely produces this text.
+     */
+    const val BASE_USERSPACE_STDOUT_TOKEN = "AliasNull base userspace OK"
+
+    /**
      * Canonical allowlisted invocations (Part 27-Q). Each is exactly one bare
      * argv that [decide] permits; naming them lets an internal diagnostic select
      * an authorized case without re-deriving argv lists and keeps [PERMITTED_ARGV]
@@ -95,6 +115,62 @@ object NativeExecutionPolicy {
     val NON_ZERO_EXIT_INVOCATION: List<String> = listOf("/system/bin/false")
 
     val LAUNCH_FAILURE_INVOCATION: List<String> = listOf(SELFCHECK_MISSING_BINARY)
+
+    /**
+     * The exact argv that runs the bundled AliasNull base-userspace executable:
+     * a single bare argv whose [argv[0]] is the installed absolute path under
+     * [installedBaseUserspaceRoot]. [installedBaseUserspaceRoot] must be the
+     * base-userspace directory the bootstrap verified (the runtime derives it
+     * from [app.aliasnull.shell.bootstrap.BaseUserspaceBootstrap.installedCheck]);
+     * it is never built from UI input. The executable runs with no arguments,
+     * no shell, and no working directory/environment/stdin.
+     */
+    fun baseExecutableInvocation(installedBaseUserspaceRoot: File): List<String> =
+        listOf(File(installedBaseUserspaceRoot, BaseUserspaceArtifact.EXECUTABLE_FILE).absolutePath)
+
+    /**
+     * Decides the bundled base-executable request (Part 27-S2), the single
+     * path-pinned allowance beside the static [PERMITTED_ARGV] list.
+     *
+     * [installedBaseExecutable] is the installed bundled executable the caller
+     * derived from the verified base directory. [process] is Allowed only when it
+     * is a bare argv (no working directory/environment/stdin) whose single
+     * argument is exactly that executable's absolute path AND whose file name is
+     * the manifest's allowlisted [BaseUserspaceArtifact.EXECUTABLE_FILE]. Every
+     * other shape - an arbitrary path, extra arguments, or an unexpected file
+     * name - is rejected before it can reach the native runner. The ordinary
+     * [decide] never permits this argv, so only this explicit verified path can
+     * ever select the bundled binary.
+     */
+    fun decideBaseExecutable(
+        process: NativeProcessRequest,
+        installedBaseExecutable: File,
+    ): NativeExecutionPolicyDecision {
+        if (installedBaseExecutable.name != BaseUserspaceArtifact.EXECUTABLE_FILE) {
+            return rejected(
+                NativeExecutionRejectionCode.EXECUTABLE_NOT_PERMITTED,
+                "The verified base executable must be the bundled " +
+                    "'${BaseUserspaceArtifact.EXECUTABLE_FILE}', not '${installedBaseExecutable.name}'.",
+            )
+        }
+        if (process.argv != listOf(installedBaseExecutable.absolutePath)) {
+            return rejected(
+                NativeExecutionRejectionCode.EXECUTABLE_NOT_PERMITTED,
+                "Only the bundled AliasNull base executable may run as the base-executable case; " +
+                    "got '${display(process.argv)}'.",
+            )
+        }
+        if (process.workingDirectory != null || process.environment.isNotEmpty() ||
+            process.stdinBytes != null
+        ) {
+            return rejected(
+                NativeExecutionRejectionCode.ARGUMENTS_NOT_PERMITTED,
+                "The bundled base executable must run as a bare argv; " +
+                    "no working directory, environment or stdin is permitted.",
+            )
+        }
+        return NativeExecutionPolicyDecision.Allowed
+    }
 
     /**
      * Decides whether [process] may reach the native runner. Total: every request

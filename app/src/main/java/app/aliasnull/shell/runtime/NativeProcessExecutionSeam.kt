@@ -3,6 +3,7 @@ package app.aliasnull.shell.runtime
 import app.aliasnull.shell.runtime.native.AliasNullNativeRuntime
 import app.aliasnull.shell.runtime.native.NativeProcessOutcome
 import app.aliasnull.shell.runtime.native.NativeProcessRequest
+import java.io.File
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -45,25 +46,39 @@ object NativeProcessExecutionSeam {
      * native runner. Suspend form: the blocking native call runs on [dispatcher]
      * (default [Dispatchers.Default]) so this is safe to call from a coroutine on
      * any context and never runs the native call on the caller's thread.
+     *
+     * [verifiedBaseExecutable], when non-null, marks [process] as the single
+     * bundled base-userspace executable case (Part 27-S2): the policy gate is
+     * then [NativeExecutionPolicy.decideBaseExecutable], which allows only that
+     * one verified bare argv. It must be the installed bundled executable derived
+     * from the verified base directory - never UI input; for any other request
+     * it stays null and the ordinary [NativeExecutionPolicy.decide] applies.
      */
     suspend fun execute(
         process: NativeProcessRequest,
         runner: AliasNullNativeRuntime,
         dispatcher: CoroutineDispatcher = Dispatchers.Default,
+        verifiedBaseExecutable: File? = null,
     ): NativeProcessExecutionResult = withContext(dispatcher) {
-        executeBlocking(process, runner)
+        executeBlocking(process, runner, verifiedBaseExecutable)
     }
 
     /**
      * Blocking form of [execute]. MUST be called from a background thread and
      * never from the Android main/UI thread, because the native runner blocks
-     * until the child terminates. Prefer the suspend [execute] form.
+     * until the child terminates. Prefer the suspend [execute] form. See
+     * [execute] for the meaning of [verifiedBaseExecutable].
      */
     fun executeBlocking(
         process: NativeProcessRequest,
         runner: AliasNullNativeRuntime,
+        verifiedBaseExecutable: File? = null,
     ): NativeProcessExecutionResult {
-        val decision = NativeExecutionPolicy.decide(process)
+        val decision = if (verifiedBaseExecutable != null) {
+            NativeExecutionPolicy.decideBaseExecutable(process, verifiedBaseExecutable)
+        } else {
+            NativeExecutionPolicy.decide(process)
+        }
         if (decision is NativeExecutionPolicyDecision.Rejected) {
             return NativeProcessExecutionResult.Rejected(decision.reason)
         }

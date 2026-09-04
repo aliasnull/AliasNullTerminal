@@ -22,6 +22,7 @@ import app.aliasnull.shell.runtime.native.NativeSessionOutcome
 import app.aliasnull.shell.runtime.native.NativeSessionResult
 import app.aliasnull.shell.terminal.TerminalSessionEngine
 import app.aliasnull.shell.terminal.TerminalSessionEngineFoundation
+import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -350,6 +351,8 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
             "The AliasNull base userspace is missing required files."
         check.mismatchedFiles.isNotEmpty() ->
             "The AliasNull base userspace failed integrity verification."
+        check.executableError != null ->
+            "The AliasNull base userspace executable is invalid."
         !check.versionMatches || !check.archMatches ->
             "The installed AliasNull base userspace does not match this build."
         else -> "The AliasNull base userspace is not ready."
@@ -563,7 +566,22 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
                     "no controlled native process was run.",
             )
         }
-        val execution = NativeProcessExecutionSeam.execute(case.request(), nativeRuntime, Dispatchers.Default)
+        val execution = if (case == NativeProcessTestKind.BASE_USERSPACE_EXECUTABLE) {
+            // The bundled base-executable case (Part 27-S2): the request is the
+            // single verified bare argv under the installed root, and the policy
+            // gate is [NativeExecutionPolicy.decideBaseExecutable] pinned to that
+            // exact verified executable (File name + absolute path re-checked), so
+            // only the installed bundled binary can ever run through this branch.
+            val installedRoot = baseUserspace.installedUserspaceRoot
+            NativeProcessExecutionSeam.execute(
+                case.request(installedRoot),
+                nativeRuntime,
+                Dispatchers.Default,
+                verifiedBaseExecutable = File(installedRoot, BaseUserspaceArtifact.EXECUTABLE_FILE),
+            )
+        } else {
+            NativeProcessExecutionSeam.execute(case.request(), nativeRuntime, Dispatchers.Default)
+        }
         val expectedMet = execution is NativeProcessExecutionResult.Executed && case.matches(execution.result)
         return NativeProcessTestResult.Outcome(case, execution, expectedMet)
     }
