@@ -9,6 +9,8 @@ import app.aliasnull.shell.execution.ShellExecutionEvent
 import app.aliasnull.shell.execution.ShellExecutionRequest
 import app.aliasnull.shell.runtime.AliasNullRuntimeManager
 import app.aliasnull.shell.runtime.ShellRuntimeManager
+import app.aliasnull.shell.terminal.TerminalInputOutcome
+import app.aliasnull.shell.terminal.TerminalInputResult
 import app.aliasnull.shell.terminal.TerminalSessionEvent
 import app.aliasnull.shell.terminal.TerminalSessionId
 import app.aliasnull.shell.terminal.TerminalSessionOutcome
@@ -64,6 +66,17 @@ import kotlinx.coroutines.launch
  * observation. Today no UI session holds a genuine association, so no state observer
  * starts, [TerminalSession.engineSessionState] stays null and no lifecycle state is
  * ever fabricated; the seam is only exercised when a real backend exists.
+ *
+ * Part 26-R adds the interactive-input seam and keeps it unreachable: a private,
+ * synchronous boundary ([sendInputToEngineSession]) through which a future
+ * engine-bound UI session forwards input to its genuine engine session via the
+ * existing `TerminalSessionEngine.sendInput`. It is invoked only with a genuine
+ * stored association - never from [activeSessionId], never synthesized - and returns
+ * the engine's own input result unchanged, so no input vocabulary is invented. Today
+ * every UI session has engineSessionId == null, so no engine input is ever sent and
+ * [submitCommand]'s existing batch path is intentionally byte-for-byte unchanged; a
+ * future milestone defines the product semantics that route an engine-bound session
+ * through this seam.
  *
  * Command execution is delegated to the runtime's [ShellCommandExecutor] (see
  * [ShellRuntimeManager]); this ViewModel never parses or simulates commands
@@ -453,6 +466,47 @@ class ShellViewModel(application: Application) : AndroidViewModel(application) {
         updateSession(uiSessionId) { session ->
             if (session.engineSessionId == engineSessionId) session.copy(engineSessionState = state) else session
         }
+    }
+
+    // ---- Engine input seam ----
+
+    /**
+     * Forwards [content] as interactive input for the engine session [engineSessionId]
+     * genuinely owned by the UI session [uiSessionId].
+     *
+     * This is the Part 26-R input boundary: the single private place a UI session's
+     * input is handed to the existing `TerminalSessionEngine.sendInput`. It is
+     * synchronous (no Job, no coroutine, no cancellation system) and returns the
+     * engine's own [TerminalInputResult] unchanged, so the engine result is the
+     * authority and no input outcome vocabulary is invented here.
+     *
+     * It must only be called with an engineSessionId read from that UI session's
+     * stored association at submit time. The originating [uiSessionId] is re-verified
+     * first so a stale id can never send input after the session was closed or
+     * re-associated, and input is never targeted by [activeSessionId].
+     *
+     * Today every UI session has engineSessionId == null, so no caller reaches this
+     * seam during normal usage and `TerminalSessionEngine.sendInput` is never
+     * invoked. [submitCommand] keeps routing through the batch executor unchanged; a
+     * future milestone defines the product semantics that send an engine-bound
+     * session's input through here.
+     */
+    private fun sendInputToEngineSession(
+        uiSessionId: Long,
+        engineSessionId: TerminalSessionId,
+        content: String,
+    ): TerminalInputResult {
+        // Association safety: the UI session must still be bound to this exact engine
+        // session. When it is gone or re-associated, nothing is sent to the engine.
+        val stillBound = _uiState.value.sessions
+            .any { it.id == uiSessionId && it.engineSessionId == engineSessionId }
+        if (!stillBound) {
+            return TerminalInputResult(
+                outcome = TerminalInputOutcome.SESSION_UNAVAILABLE,
+                message = "No engine input was sent: the UI session is no longer bound to the supplied engine session.",
+            )
+        }
+        return runtime.terminalSessionEngine.sendInput(engineSessionId, content)
     }
 
     // ---- Internals ----
