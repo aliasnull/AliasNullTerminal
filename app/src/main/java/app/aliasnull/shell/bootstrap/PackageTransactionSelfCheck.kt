@@ -1,5 +1,6 @@
 package app.aliasnull.shell.bootstrap
 
+import app.aliasnull.shell.bootstrap.PackageTransaction.PackageInstallResult
 import java.io.File
 
 /** One validation assertion in a [PackageTransactionSelfCheckReport]. */
