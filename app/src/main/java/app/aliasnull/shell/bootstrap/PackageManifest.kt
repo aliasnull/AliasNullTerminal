@@ -672,6 +672,21 @@ internal object PackageLayout {
     /** `tmp/backup-packages` - future pre-replacement/removal backup/rollback. */
     const val BACKUP_PACKAGES_RELATIVE_DIR = "$TMP_DIR/$BACKUP_PACKAGES_DIR"
 
+    /** The reserved, non-payload manifest file living inside every package tree
+     * (source, staging and installed) at the package root. It always holds the
+     * canonical manifest encoding; a payload path may never equal it. */
+    const val RESERVED_MANIFEST_FILE = "manifest"
+
+    /** The reserved transaction marker written into a staging tree only after the
+     * staged payload has fully verified (Part 27-V). It is transaction metadata,
+     * never package payload, and may never be a payload path or a payload
+     * ancestor name at the package root. */
+    const val VERIFIED_MARKER_FILE = ".verified"
+
+    /** The on-disk suffix of per-package state records under [PACKAGE_METADATA_RELATIVE_DIR]
+     * (`<name>.state`). */
+    const val PACKAGE_STATE_FILE_SUFFIX = ".state"
+
     /** The future install directory of package [name] relative to the runtime
      * root (`userspace/packages/<name>`), or null when [name] is not a valid
      * package name. Pure path composition - nothing is created or inspected. */
