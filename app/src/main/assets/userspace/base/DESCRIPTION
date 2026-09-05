@@ -1,22 +1,37 @@
 AliasNull base userspace - versioned foundation artifact.
 
 This is the first real, versioned AliasNull base-userspace artifact (Part 27-R,
-extended by Part 27-S2). It is NOT a Linux filesystem, a rootfs image, a shell,
-a package manager, or a set of system tools. It is a minimal, honest,
-self-identifying foundation that AliasNull installs into its private runtime
-directory and verifies before the runtime reports ready.
+extended by Part 27-S2 and Part 27-T1). It is NOT a Linux filesystem, a rootfs
+image, a shell, a package manager, or a set of system tools. It is a minimal,
+honest, self-identifying foundation that AliasNull installs into its private
+runtime directory and verifies before the runtime reports ready.
 
-Since Part 27-S2 the artifact contains ONE real, source-built arm64 executable,
+The artifact contains ONE real, source-built arm64 executable,
 aliasnull_base_probe: the first genuine executable component of the AliasNull
 base userspace. It is a small Android AArch64 PIE built from this repository
 (app/src/main/cpp/aliasnull_base_probe.cpp) with the Android NDK, bundled as an
 APK asset, and verified (SHA-256, 64-bit AArch64 ELF, executable permission)
-before the runtime reports ready. It prints "AliasNull base userspace OK" and
-exits 0. It is NOT a shell, NOT a general command runner, and NOT a Linux
-userspace: AliasNull does not yet include Python, Git, a package manager, or
-arbitrary command execution, and unknown Shell commands stay unknown. The
-executable is exercised only through the controlled developer-diagnostic native
-runtime test panel, never through the Shell command surface.
+before the runtime reports ready.
+
+The executable has two deterministic modes, selected solely by whether it is
+launched under the controlled base-execution environment (Part 27-T1):
+
+  - DEFAULT: prints "AliasNull base userspace OK" and exits 0 (unchanged since
+    Part 27-S2 - the base-executable diagnostic asserts this line).
+  - CONTROLLED ENVIRONMENT: when the app launches it with the one AliasNull-owned
+    environment override (ALIASNULL_BASE_ENV=<fixed marker>) and the controlled
+    working directory under the verified base userspace, it prints "AliasNull
+    base environment OK", then the real working directory ("cwd=<canonical path>")
+    and the override echoed back, then exits 0. The base-environment diagnostic
+    asserts those exact values, proving the controlled cwd and env were really
+    applied.
+
+It is NOT a shell, NOT a general command runner, and NOT a Linux userspace:
+AliasNull does not yet include Python, Git, a package manager, or arbitrary
+command execution, and unknown Shell commands stay unknown. The executable is
+exercised only through the controlled developer-diagnostic native runtime test
+panel (Base Executable / Base Environment), never through the Shell command
+surface.
 
 Contents of this artifact:
   VERSION              - the base artifact version (single source of truth)

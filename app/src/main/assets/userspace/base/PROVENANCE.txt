@@ -1,4 +1,5 @@
-AliasNull base userspace artifact - provenance and scope (Part 27-R, Part 27-S2)
+AliasNull base userspace artifact - provenance and scope
+(Part 27-R, Part 27-S2, Part 27-T1)
 
 Scope of this artifact
 ----------------------
@@ -14,8 +15,8 @@ The documentation/metadata files (VERSION, ARCH, DESCRIPTION, PROVENANCE.txt,
 LICENSE.txt) are original AliasNull-authored files produced from the AliasNull
 repository and bundled verbatim into the signed APK.
 
-aliasnull_base_probe is the first real executable component of the AliasNull
-base userspace (Part 27-S2). Its provenance:
+aliasnull_base_probe is the real executable component of the AliasNull base
+userspace (Part 27-S2). Its provenance:
 
   - Component:      aliasnull_base_probe
   - Executable ver: 1
@@ -25,7 +26,24 @@ base userspace (Part 27-S2). Its provenance:
   - Toolchain NDK:  28.2.13676358 (NDK r28c)
   - Target ABI:     arm64-v8a (AArch64, 64-bit)
   - Android API:    26 (PIE executable, interpreter /system/bin/linker64)
-  - Output:         prints "AliasNull base userspace OK\n" and exits 0
+  - Output:         two deterministic modes, selected only by whether the
+                    executable is launched under the controlled base-execution
+                    environment (Part 27-T1):
+                      DEFAULT (no ALIASNULL_BASE_ENV, or a different value):
+                        prints "AliasNull base userspace OK\n" and exits 0 -
+                        unchanged since Part 27-S2, so the base-executable
+                        diagnostic contract is byte-stable;
+                      CONTROLLED ENVIRONMENT (ALIASNULL_BASE_ENV exactly equal to
+                        the fixed marker "AliasNull controlled base environment",
+                        which is exactly the one override the execution
+                        environment supplies): prints "AliasNull base environment
+                        OK\n", "cwd=<the real working directory>\n" and
+                        "ALIASNULL_BASE_ENV=<marker>\n", then exits 0. The
+                        controlled working directory and that one override come
+                        ONLY from the verified base userspace and the fixed
+                        execution-environment policy - never from UI or user
+                        input - and the base-environment diagnostic asserts them
+                        exactly, so it proves the child really ran under them.
   - Nature:         a normal executable; never a JNI library, never loaded with
                     System.loadLibrary, and never part of libaliasnull_runtime.so
   - License:        AliasNull project source terms (see LICENSE.txt)
@@ -54,12 +72,13 @@ Why each file is required
   LICENSE.txt    - licensing note.
   aliasnull_base_probe - the real 64-bit AArch64 base-userspace executable,
                    exercised through the controlled developer-diagnostic test
-                   panel, never through the Shell command surface.
+                   panel (Base Executable / Base Environment), never through the
+                   Shell command surface.
 
 No Android /system binaries are part of this artifact. The controlled native
-runtime tests (Echo/Stderr/Non-zero Exit/Launch Failure/Base Executable) run
-strictly internally for diagnostics; those host probes and this bundled
-executable are not general Shell commands.
+runtime tests (Echo/Stderr/Non-zero Exit/Launch Failure/Base Executable/Base
+Environment) run strictly internally for diagnostics; those host probes and this
+bundled executable are not general Shell commands.
 
 Honest limitation
 -----------------

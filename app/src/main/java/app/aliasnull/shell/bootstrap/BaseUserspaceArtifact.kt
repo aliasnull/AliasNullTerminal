@@ -6,7 +6,7 @@ import java.security.MessageDigest
 
 /**
  * The single source of truth describing the bundled AliasNull base-userspace
- * artifact (Part 27-R, extended by Part 27-S2).
+ * artifact (Part 27-R, extended by Part 27-S2 and Part 27-T1).
  *
  * The artifact is a small, deterministic, versioned set of original
  * AliasNull-authored metadata files (see [PROVENANCE_FILE]) bundled verbatim
@@ -14,7 +14,10 @@ import java.security.MessageDigest
  * ([EXECUTABLE_FILE], Part 27-S2). It is not a Linux filesystem, a shell or a
  * set of system tools: the executable is the first genuine arm64 component of
  * the base userspace and is exercised only through the controlled developer
- * diagnostic, never through the Shell.
+ * diagnostic, never through the Shell. Since Part 27-T1 the same executable has
+ * a controlled execution-environment mode (selected by the single AliasNull
+ * environment override) that reports the real controlled working directory and
+ * override; see [NativeExecutionPolicy] and the DESCRIPTION/PROVENANCE asset.
  *
  * [FILES] maps each artifact-relative file name to its expected SHA-256 digest
  * (lowercase hex). The digests are the compile-time-known integrity record the
@@ -34,7 +37,7 @@ object BaseUserspaceArtifact {
      * changes so the bootstrap treats an older installed base as upgradeable
      * rather than current. Mirrored by the [VERSION_FILE] file.
      */
-    const val VERSION = "2"
+    const val VERSION = "3"
 
     /**
      * The single architecture this build is produced for (ABI filter arm64-v8a).
@@ -78,7 +81,7 @@ object BaseUserspaceArtifact {
      * proven regenerable, never merely trusted.
      */
     const val BASE_EXECUTABLE_SHA256 =
-        "435b8d7dd2a25fe3629a3e8e89c89b9dc1b887c82ca1e3c16017077c29afb27c"
+        "bda533cbfa75ab4017320016bbdaa772279c4632d59324a3579ebf9f05128fdd"
 
     /**
      * Traceable provenance of the bundled [EXECUTABLE_FILE]. Kept beside the
@@ -93,10 +96,10 @@ object BaseUserspaceArtifact {
         const val SOURCE_FILE = "app/src/main/cpp/aliasnull_base_probe.cpp"
 
         /** Source revision the committed executable bytes were built at. */
-        const val SOURCE_REVISION = "098661fe4e20913cf51d9051ecad0e81aff9c329"
+        const val SOURCE_REVISION = "51deebfb7a33bf8479fdd8e77bd17ae05b8e9e8c"
 
         /** CI workflow run id that produced the committed executable bytes. */
-        const val SOURCE_CI_RUN_ID = "33915782397"
+        const val SOURCE_CI_RUN_ID = "33951789760"
 
         /** CI workflow name that produced the committed executable bytes. */
         const val SOURCE_CI_WORKFLOW = "Build AliasNull Android"
@@ -121,10 +124,10 @@ object BaseUserspaceArtifact {
      * from the file bytes whenever a file's content changes.
      */
     val FILES: Map<String, String> = linkedMapOf(
-        VERSION_FILE to "53c234e5e8472b6ac51c1ae1cab3fe06fad053beb8ebfd8977b010655bfdd3c3",
+        VERSION_FILE to "1121cfccd5913f0a63fec40a6ffd44ea64f9dc135c66634ba001d10bcf4302a2",
         ARCH_FILE to "7f10c3cd4593d1d6ded27d658e7c05216011c955c200aac551caad0c979d4d90",
-        DESCRIPTION_FILE to "595fd08d8a1a4553f75d0121ce6c65b2580cf18c2d8d82966d901772dbcad95b",
-        PROVENANCE_FILE to "ccdf9c9dc91266f8fbf9c24e31262639ec2b1037bc61a5a8e4ce9a56008d002d",
+        DESCRIPTION_FILE to "77c4729ba6d57b3bda949e70b389fcd82f0c80d2ad97c1bd741a9ed3eab73fad",
+        PROVENANCE_FILE to "87c24cc160b675d3374c1c0c21b6a64e353c43d6edaa02c296ebfbada7d86265",
         LICENSE_FILE to "7e3d3c7d699c7cb35aa2f094ea5750a3a8cd13273053fe5541bd95b69be711ae",
         EXECUTABLE_FILE to BASE_EXECUTABLE_SHA256,
     )

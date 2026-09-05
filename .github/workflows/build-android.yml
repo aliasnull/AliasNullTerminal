@@ -166,51 +166,6 @@ jobs:
           sha256sum "$BIN" | tee build/userspace-probe/aliasnull_base_probe.sha256
           test -s build/userspace-probe/aliasnull_base_probe.sha256 || { echo "FAIL: SHA-256 not generated"; exit 1; }
 
-      # ---- Part 27-T1 regeneration bootstrap (TEMPORARY - reverted by the follow-up commit) ----
-      # The probe source changed in this commit, so the reproducibility gate below
-      # will (correctly) fail until the freshly built bytes are committed as the
-      # APK asset. To obtain exactly those bytes, provenance generation and the
-      # probe-artifact upload run BEFORE the gate in THIS commit only; the
-      # follow-up commit restores the gate-first order and commits the regenerated
-      # asset so a fresh build then reproduces it.
-      - name: Generate provenance metadata
-        run: |
-          BIN="build/userspace-probe/aliasnull_base_probe"
-          SHA="$(awk '{print $1}' build/userspace-probe/aliasnull_base_probe.sha256)"
-          SIZE="$(wc -c < "$BIN")"
-          PROV="build/userspace-probe/aliasnull_base_probe.provenance.txt"
-          {
-            echo "component: aliasnull_base_probe"
-            echo "executable_version: 1"
-            echo "source_repository: AliasNull (aliasnull/AliasNullTerminal)"
-            echo "source_revision: ${GITHUB_SHA}"
-            echo "source_file: app/src/main/cpp/aliasnull_base_probe.cpp"
-            echo "build_system: CMake + Android NDK android.toolchain.cmake"
-            echo "toolchain_ndk: 28.2.13676358"
-            echo "target_abi: arm64-v8a"
-            echo "target_arch: AArch64 (64-bit)"
-            echo "android_platform: 26"
-            echo "workflow: ${GITHUB_WORKFLOW}"
-            echo "run_id: ${GITHUB_RUN_ID}"
-            echo "run_url: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-            echo "filename: aliasnull_base_probe"
-            echo "file_size_bytes: ${SIZE}"
-            echo "sha256: ${SHA}"
-            echo "license: AliasNull project source terms (see repository LICENSE)"
-          } > "$PROV"
-          cat "$PROV"
-          test -s "$PROV" || { echo "FAIL: provenance metadata not generated"; exit 1; }
-
-      - name: Upload base userspace probe artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: aliasnull-base-userspace-arm64
-          path: |
-            build/userspace-probe/aliasnull_base_probe
-            build/userspace-probe/aliasnull_base_probe.sha256
-            build/userspace-probe/aliasnull_base_probe.provenance.txt
-          if-no-files-found: error
-
       # ---- Part 27-S2: the committed asset must be the reproducible binary ----
       # The standalone build above re-derives the probe from the CURRENT source
       # tree. CI must prove that the committed APK asset
@@ -248,6 +203,44 @@ jobs:
           test -x "$FRESH" || { echo "FAIL: fresh build $FRESH is not executable"; exit 1; }
           echo "OK: committed base-userspace executable reproduces the fresh build and matches the manifest constant"
           echo "note: stored-exec-bit asserted for packaging intent; Android runtime exec is verified only on a device"
+
+      - name: Generate provenance metadata
+        run: |
+          BIN="build/userspace-probe/aliasnull_base_probe"
+          SHA="$(awk '{print $1}' build/userspace-probe/aliasnull_base_probe.sha256)"
+          SIZE="$(wc -c < "$BIN")"
+          PROV="build/userspace-probe/aliasnull_base_probe.provenance.txt"
+          {
+            echo "component: aliasnull_base_probe"
+            echo "executable_version: 1"
+            echo "source_repository: AliasNull (aliasnull/AliasNullTerminal)"
+            echo "source_revision: ${GITHUB_SHA}"
+            echo "source_file: app/src/main/cpp/aliasnull_base_probe.cpp"
+            echo "build_system: CMake + Android NDK android.toolchain.cmake"
+            echo "toolchain_ndk: 28.2.13676358"
+            echo "target_abi: arm64-v8a"
+            echo "target_arch: AArch64 (64-bit)"
+            echo "android_platform: 26"
+            echo "workflow: ${GITHUB_WORKFLOW}"
+            echo "run_id: ${GITHUB_RUN_ID}"
+            echo "run_url: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo "filename: aliasnull_base_probe"
+            echo "file_size_bytes: ${SIZE}"
+            echo "sha256: ${SHA}"
+            echo "license: AliasNull project source terms (see repository LICENSE)"
+          } > "$PROV"
+          cat "$PROV"
+          test -s "$PROV" || { echo "FAIL: provenance metadata not generated"; exit 1; }
+
+      - name: Upload base userspace probe artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: aliasnull-base-userspace-arm64
+          path: |
+            build/userspace-probe/aliasnull_base_probe
+            build/userspace-probe/aliasnull_base_probe.sha256
+            build/userspace-probe/aliasnull_base_probe.provenance.txt
+          if-no-files-found: error
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
