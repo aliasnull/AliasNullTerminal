@@ -140,7 +140,7 @@ object BaseUserspaceArtifact {
      * freshly built artifact; never hand-invented.
      */
     const val BASE_DIGEST_SHA256 =
-        "0000000000000000000000000000000000000000000000000000000000000000"
+        "0059de094d744795f782c0cd77aa6d9375421e6ea317c91fa32438fa3925aad7"
 
     /**
      * Traceable provenance of the bundled [DIGEST_EXECUTABLE_FILE]. Kept beside
@@ -155,10 +155,10 @@ object BaseUserspaceArtifact {
         const val SOURCE_FILE = "app/src/main/cpp/aliasnull_digest.cpp"
 
         /** Source revision the committed executable bytes were built at. */
-        const val SOURCE_REVISION = "0000000000000000000000000000000000000000"
+        const val SOURCE_REVISION = "ac34fedb7818ec609fac5f1ed189d0d79584fc50"
 
         /** CI workflow run id that produced the committed executable bytes. */
-        const val SOURCE_CI_RUN_ID = "00000000000"
+        const val SOURCE_CI_RUN_ID = "33959118323"
 
         /** CI workflow name that produced the committed executable bytes. */
         const val SOURCE_CI_WORKFLOW = "Build AliasNull Android"
