@@ -171,6 +171,11 @@ fun ShellScreen(
                         state = state.nativeProcessTest,
                         onRun = viewModel::runNativeProcessTest,
                     )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    PackageTransactionTestPanel(
+                        state = state.packageTransactionTest,
+                        onRun = viewModel::runPackageTransactionTest,
+                    )
                 }
             }
         }

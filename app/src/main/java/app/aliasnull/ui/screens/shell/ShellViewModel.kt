@@ -5,6 +5,8 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import app.aliasnull.shell.bootstrap.PackageTransactionDiagnosticResult
+import app.aliasnull.shell.bootstrap.PackageTransactionTestKind
 import app.aliasnull.shell.execution.ShellExecutionEvent
 import app.aliasnull.shell.execution.ShellExecutionRequest
 import app.aliasnull.shell.runtime.AliasNullRuntimeManager
@@ -634,6 +636,70 @@ class ShellViewModel(application: Application) : AndroidViewModel(application) {
                 } else {
                     state.copy(
                         nativeProcessTest = NativeProcessTestUiState(runningCase = null, result = result),
+                    )
+                }
+            }
+        }
+    }
+
+    // ---- Part 27-V-DEVICE-DIAGNOSTIC package-transaction self-check ----
+
+    /**
+     * Runs exactly one authorized package-transaction diagnostic [kind] through
+     * the runtime's controlled boundary and publishes the genuine structured
+     * result on [ShellUiState.packageTransactionTest].
+     *
+     * This is a labeled developer diagnostic, not a Shell command and not a
+     * package manager: [kind] is the only choice a caller makes (the UI never
+     * builds a package name, manifest, payload, source path or executable), and
+     * the outcome is shown truthfully - PASS only when the real transaction's
+     * outcome and the inspected postconditions matched the case's stated
+     * expectation. At most one case runs at a time: a call while one is already
+     * in flight is ignored, and the running case is cleared when the run
+     * completes. The transaction runs off the main thread inside the runtime;
+     * a genuinely unexpected failure is surfaced as a FAIL result, never thrown
+     * into the UI or silently dropped.
+     */
+    fun runPackageTransactionTest(kind: PackageTransactionTestKind) {
+        // One-at-a-time: ignore a request while a case is already in flight.
+        if (_uiState.value.packageTransactionTest.runningCase != null) return
+        _uiState.update { state ->
+            state.copy(
+                packageTransactionTest = state.packageTransactionTest.copy(
+                    runningCase = kind,
+                    result = null,
+                ),
+            )
+        }
+        viewModelScope.launch {
+            val result = try {
+                runtime.runPackageTransactionTest(kind)
+            } catch (cancelled: CancellationException) {
+                // ViewModel scope cleared or the run cancelled; not a test failure.
+                throw cancelled
+            } catch (t: Throwable) {
+                // The controlled boundary itself failed outside its result model:
+                // never crash the screen, never leave the panel stuck at Running,
+                // and never fabricate a transaction outcome.
+                PackageTransactionDiagnosticResult(
+                    kind = kind,
+                    passed = false,
+                    outcomeLine = "diagnostic failed with an unexpected error",
+                    detailLines = listOf(t.message ?: t::class.simpleName ?: "unknown error"),
+                )
+            }
+            _uiState.update { state ->
+                val test = state.packageTransactionTest
+                // The one-at-a-time guard means this run is still the one in flight
+                // unless the state was already replaced, so publish only then.
+                if (test.runningCase != kind) {
+                    state
+                } else {
+                    state.copy(
+                        packageTransactionTest = PackageTransactionTestUiState(
+                            runningCase = null,
+                            result = result,
+                        ),
                     )
                 }
             }

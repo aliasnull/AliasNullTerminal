@@ -1,6 +1,8 @@
 package app.aliasnull.ui.screens.shell
 
 import androidx.compose.ui.text.input.TextFieldValue
+import app.aliasnull.shell.bootstrap.PackageTransactionDiagnosticResult
+import app.aliasnull.shell.bootstrap.PackageTransactionTestKind
 import app.aliasnull.shell.runtime.NativeProcessTestKind
 import app.aliasnull.shell.runtime.NativeProcessTestResult
 import app.aliasnull.shell.runtime.ShellBackendState
@@ -96,6 +98,18 @@ data class ShellUiState(
      * one-at-a-time); [result] is the last truthful [NativeProcessTestResult].
      */
     val nativeProcessTest: NativeProcessTestUiState = NativeProcessTestUiState(),
+    /**
+     * The Part 27-V-DEVICE-DIAGNOSTIC package-transaction panel state: which (if
+     * any) single case is running right now and the last genuine structured
+     * result. Global (not per session) and deliberately UI-session-independent:
+     * this is a labeled developer diagnostic, never a Shell command surface,
+     * never a package-manager surface and never routed through a session or the
+     * command executor. [runningCase] being non-null means one case is genuinely
+     * in flight (the guard for one-at-a-time); [result] is the last truthful
+     * [PackageTransactionDiagnosticResult]. Package transactions stay dormant
+     * unless a case here explicitly drives one.
+     */
+    val packageTransactionTest: PackageTransactionTestUiState = PackageTransactionTestUiState(),
 ) {
     val activeSession: TerminalSession?
         get() = sessions.firstOrNull { it.id == activeSessionId }
@@ -120,4 +134,23 @@ data class ShellUiState(
 data class NativeProcessTestUiState(
     val runningCase: NativeProcessTestKind? = null,
     val result: NativeProcessTestResult? = null,
+)
+
+/**
+ * The on-screen state of the Part 27-V-DEVICE-DIAGNOSTIC "Package Transaction
+ * Test" developer panel.
+ *
+ * Mirrors [NativeProcessTestUiState]: it carries exactly two honest facts - which
+ * single [PackageTransactionTestKind] case is running right now ([runningCase],
+ * null when none is) and the last structured result ([result], null before any
+ * run completes). The UI derives its display from these - Idle when both are
+ * null, Running when [runningCase] is non-null, and otherwise the [result]
+ * rendered truthfully (PASS only when the case's stated expectation was
+ * genuinely met by the real transaction). The UI never builds a package, path,
+ * manifest or payload; the only choice is the [PackageTransactionTestKind]
+ * passed to [ShellViewModel.runPackageTransactionTest].
+ */
+data class PackageTransactionTestUiState(
+    val runningCase: PackageTransactionTestKind? = null,
+    val result: PackageTransactionDiagnosticResult? = null,
 )

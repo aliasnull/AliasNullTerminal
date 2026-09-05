@@ -1,5 +1,7 @@
 package app.aliasnull.shell.runtime
 
+import app.aliasnull.shell.bootstrap.PackageTransactionDiagnosticResult
+import app.aliasnull.shell.bootstrap.PackageTransactionTestKind
 import app.aliasnull.shell.execution.ExecutionBackend
 import app.aliasnull.shell.execution.ExecutionBackendAvailability
 import app.aliasnull.shell.execution.ShellCommandExecutor
@@ -140,4 +142,26 @@ interface ShellRuntimeManager {
      * suspend function is safe to call from the main thread.
      */
     suspend fun runNativeProcessTest(case: NativeProcessTestKind): NativeProcessTestResult
+
+    /**
+     * Runs exactly one authorized package-transaction diagnostic case
+     * (Part 27-V-DEVICE-DIAGNOSTIC) and returns the genuine structured outcome.
+     *
+     * This is the app-facing controlled boundary over the real
+     * [app.aliasnull.shell.bootstrap.PackageTransaction] engine. [case] is the
+     * only thing a caller chooses - never a package name, manifest, payload,
+     * path or executable. The underlying scenario is generated internally and
+     * deterministically by
+     * [app.aliasnull.shell.bootstrap.PackageTransactionDiagnostic], which drives
+     * the real production install transaction against a dedicated disposable
+     * app-private root (never the base userspace, never the application package
+     * namespace) and cleans up exactly that root afterwards. This is NOT a Shell
+     * command surface and never a package manager: nothing routes an AN Shell
+     * command here, no `alia` command exists, and package transactions stay
+     * dormant unless this diagnostic explicitly invokes them.
+     *
+     * The blocking transaction runs off the caller's thread on the background
+     * dispatcher, so this suspend function is safe to call from the main thread.
+     */
+    suspend fun runPackageTransactionTest(case: PackageTransactionTestKind): PackageTransactionDiagnosticResult
 }

@@ -2,6 +2,9 @@ package app.aliasnull.shell.runtime
 
 import android.app.Application
 import android.util.Log
+import app.aliasnull.shell.bootstrap.PackageTransactionDiagnostic
+import app.aliasnull.shell.bootstrap.PackageTransactionDiagnosticResult
+import app.aliasnull.shell.bootstrap.PackageTransactionTestKind
 import app.aliasnull.shell.bootstrap.BaseUserspaceArtifact
 import app.aliasnull.shell.bootstrap.BaseUserspaceBootstrap
 import app.aliasnull.shell.bootstrap.BaseUserspaceBootstrapState
@@ -33,6 +36,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * The app's [ShellRuntimeManager]: owns the honest runtime lifecycle and drives
@@ -96,6 +100,18 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
      * denied"), which is exactly the device failure this root relocation fixes.
      */
     private val baseUserspaceRoot: File = File(application.filesDir, BASE_USERSPACE_ROOT_NAME)
+
+    /**
+     * The dedicated disposable diagnostic root for the Part 27-V-DEVICE-DIAGNOSTIC
+     * package-transaction panel, under the application's filesDir as a sibling of
+     * [baseUserspaceRoot]. It is created only when a diagnostic case runs and is
+     * wiped by that run; the real package namespace and the immutable base
+     * userspace are never touched, and package transactions stay dormant unless
+     * the diagnostic explicitly drives one.
+     */
+    private val packageTransactionDiagnosticRoot: File by lazy {
+        File(application.filesDir, PackageTransactionDiagnostic.ROOT_DIR_NAME)
+    }
 
     /**
      * The real AliasNull base-userspace bootstrap (Part 27-R): installs and
@@ -715,6 +731,22 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
         val bootstrapped = nativeRuntime.isNativeBootstrapActive
         return "The native runtime is not ready (library ${if (loaded) "loaded" else "not loaded"}, " +
             "bootstrap ${if (bootstrapped) "active" else "not active"}); no controlled native process was run."
+    }
+
+    /**
+     * Part 27-V-DEVICE-DIAGNOSTIC: runs one authorized package-transaction case
+     * against a dedicated disposable app-private root. The orchestrator
+     * ([PackageTransactionDiagnostic]) builds the deterministic scenario, drives
+     * the real [app.aliasnull.shell.bootstrap.PackageTransaction.install] engine
+     * and cleans up exactly the diagnostic root. The blocking filesystem work
+     * runs on the background dispatcher, so this is safe to call from the main
+     * thread; no native runtime or base userspace is involved, and the immutable
+     * base userspace is never touched.
+     */
+    override suspend fun runPackageTransactionTest(
+        case: PackageTransactionTestKind,
+    ): PackageTransactionDiagnosticResult = withContext(Dispatchers.Default) {
+        PackageTransactionDiagnostic.run(packageTransactionDiagnosticRoot, case)
     }
 
     private companion object {
