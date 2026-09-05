@@ -4,6 +4,12 @@ package app.aliasnull.shell.bootstrap
  * The authorized Part 27-V-DEVICE-DIAGNOSTIC cases a developer diagnostic panel
  * may run against the real [PackageTransaction] engine.
  *
+ * Public because this enum crosses the runtime -> UI boundary through the public
+ * [app.aliasnull.shell.runtime.ShellRuntimeManager] seam and public Shell UI
+ * state (mirroring the public
+ * [app.aliasnull.shell.runtime.NativeProcessTestKind]); the underlying
+ * orchestrator [PackageTransactionDiagnostic] stays internal.
+ *
  * This enum is the ONLY choice a caller (a ViewModel, a button) may make. There is
  * deliberately no way to pick a package name, a manifest, a payload, an
  * architecture, a source path or any user-supplied value here: every case maps to
@@ -22,7 +28,7 @@ package app.aliasnull.shell.bootstrap
  * the transaction's genuine structured outcome and the postconditions match
  * [expectedOutcome].
  */
-internal enum class PackageTransactionTestKind(
+enum class PackageTransactionTestKind(
     val title: String,
     val expectedOutcome: String,
 ) {
