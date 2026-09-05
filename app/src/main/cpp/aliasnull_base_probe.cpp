@@ -79,7 +79,7 @@ int main() {
         // because the native runner chdir'd into a validated directory before
         // exec; if it somehow did, fail loudly and deterministically.
         char cwd[PATH_MAX];
-        if (std::getcwd(cwd, sizeof(cwd)) == nullptr) {
+        if (getcwd(cwd, sizeof(cwd)) == nullptr) {
             std::fputs("AliasNull base environment FAILED: could not determine the working directory\n", stdout);
             std::fflush(stdout);
             return 1;
