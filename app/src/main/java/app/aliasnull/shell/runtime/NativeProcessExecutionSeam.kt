@@ -66,7 +66,7 @@ object NativeProcessExecutionSeam {
      * other request both stay null and the ordinary [NativeExecutionPolicy.decide]
      * applies.
      */
-    suspend fun execute(
+    internal suspend fun execute(
         process: NativeProcessRequest,
         runner: AliasNullNativeRuntime,
         dispatcher: CoroutineDispatcher = Dispatchers.Default,
@@ -83,7 +83,7 @@ object NativeProcessExecutionSeam {
      * [execute] for the meaning of [verifiedBaseExecutable] and
      * [baseExecutionEnvironment].
      */
-    fun executeBlocking(
+    internal fun executeBlocking(
         process: NativeProcessRequest,
         runner: AliasNullNativeRuntime,
         verifiedBaseExecutable: File? = null,
