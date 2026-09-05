@@ -26,7 +26,8 @@ internal data class NativeExecutionPolicySelfCheckReport(
 /**
  * Dormant, process-free self-check for the permanent base-executable launch
  * policy (Part 27-S2). Every case makes a GENUINE call to
- * [NativeExecutionPolicy.decide] or [NativeExecutionPolicy.decideBaseExecutable]
+ * [NativeExecutionPolicy.decide], [NativeExecutionPolicy.decideBaseExecutable]
+ * or [NativeExecutionPolicy.decideBaseExecutionEnvironment]
  * on a request built the same way the runtime builds it and asserts the true
  * result; nothing is fabricated and no child process is launched (the decision
  * layer never touches the native runner). The assertions fix the permanent
@@ -35,12 +36,15 @@ internal data class NativeExecutionPolicySelfCheckReport(
  *   - the base executable's request is a LINKER_LAUNCH request whose argv is the
  *     fixed linker host plus the verified installed executable path;
  *   - that exact request is the ONLY thing the base policy allows;
- *   - any other target path, file name, linker argument or launch mode is
- *     rejected;
+ *   - the controlled base-execution-environment decision (Part 27-T1) allows the
+ *     same executable only under the single verified work directory and the one
+ *     AliasNull-owned environment override, and the two decisions stay distinct;
+ *   - any other target path, file name, linker argument, working directory,
+ *     environment or launch mode is rejected;
  *   - the ordinary [NativeExecutionPolicy.decide] gate still allows exactly the
  *     four DIRECT host self-check invocations and never permits a LINKER_LAUNCH
- *     request or a direct exec of the linker, so no generic "run this file
- *     through linker64" facility exists.
+ *     request, a working directory/environment request or a direct exec of the
+ *     linker, so no generic "run this file through linker64" facility exists.
  *
  * Readiness and integrity - "the base cannot run before the base userspace is
  * installed and verified" and "bootstrap integrity is enforced" - are not pure
@@ -193,6 +197,235 @@ internal object NativeExecutionPolicySelfCheck {
                 append("args=").append(describe(badArgs)).append("; ")
                 append("malformed=").append(describe(malformed))
             }
+        }
+
+        // ---- Part 27-T1: the controlled base-execution-environment decision ----
+        // These cases assert the sibling policy decision
+        // [NativeExecutionPolicy.decideBaseExecutionEnvironment] that the
+        // controlled base-execution-environment case runs under. Like every case in
+        // this file they are pure policy: the decision inspects only the request's
+        // argv/mode/working-directory/environment shape and never touches the file
+        // system, so the deterministic stand-in installed root and its controlled
+        // work directory below never need to exist on the device.
+        val allowedWorkingDirectory =
+            File(VERIFIED_ROOT_PREFIX, BaseExecutionEnvironment.WORK_DIR_NAME).absolutePath
+        val envRequest = NativeProcessRequest(
+            argv = NativeExecutionPolicy.baseExecutableInvocation(verifiedRoot),
+            launchMode = LaunchMode.LINKER_LAUNCH,
+            workingDirectory = allowedWorkingDirectory,
+            environment = NativeExecutionPolicy.baseExecutionEnvironmentOverrides,
+        )
+
+        cases += decisionCase(
+            "I. the environment decision allows the pinned base-execution-environment request",
+        ) {
+            val decision = NativeExecutionPolicy.decideBaseExecutionEnvironment(
+                envRequest,
+                verifiedExecutable,
+                allowedWorkingDirectory,
+            )
+            (decision is NativeExecutionPolicyDecision.Allowed) to describe(decision)
+        }
+
+        cases += decisionCase(
+            "I. the bare base-executable decision rejects the environment request (modes stay distinct)",
+        ) {
+            val decision = NativeExecutionPolicy.decideBaseExecutable(envRequest, verifiedExecutable)
+            isRejected(decision, NativeExecutionRejectionCode.ARGUMENTS_NOT_PERMITTED) to describe(decision)
+        }
+
+        cases += decisionCase(
+            "J. the environment decision pins the working directory to the verified work dir",
+        ) {
+            val otherCwd = NativeProcessRequest(
+                argv = envRequest.argv,
+                launchMode = LaunchMode.LINKER_LAUNCH,
+                workingDirectory = File(VERIFIED_ROOT_PREFIX, "elsewhere").absolutePath,
+                environment = NativeExecutionPolicy.baseExecutionEnvironmentOverrides,
+            )
+            val decision = NativeExecutionPolicy.decideBaseExecutionEnvironment(
+                otherCwd,
+                verifiedExecutable,
+                allowedWorkingDirectory,
+            )
+            isRejected(decision, NativeExecutionRejectionCode.ARGUMENTS_NOT_PERMITTED) to describe(decision)
+        }
+
+        cases += decisionCase(
+            "J. the environment decision requires a working directory (missing cwd rejected)",
+        ) {
+            val noCwd = NativeProcessRequest(
+                argv = envRequest.argv,
+                launchMode = LaunchMode.LINKER_LAUNCH,
+                environment = NativeExecutionPolicy.baseExecutionEnvironmentOverrides,
+            )
+            val decision = NativeExecutionPolicy.decideBaseExecutionEnvironment(
+                noCwd,
+                verifiedExecutable,
+                allowedWorkingDirectory,
+            )
+            isRejected(decision, NativeExecutionRejectionCode.ARGUMENTS_NOT_PERMITTED) to describe(decision)
+        }
+
+        cases += decisionCase(
+            "K. the environment decision requires exactly the one AliasNull-owned override (missing env rejected)",
+        ) {
+            val noEnv = NativeProcessRequest(
+                argv = envRequest.argv,
+                launchMode = LaunchMode.LINKER_LAUNCH,
+                workingDirectory = allowedWorkingDirectory,
+            )
+            val decision = NativeExecutionPolicy.decideBaseExecutionEnvironment(
+                noEnv,
+                verifiedExecutable,
+                allowedWorkingDirectory,
+            )
+            isRejected(decision, NativeExecutionRejectionCode.ARGUMENTS_NOT_PERMITTED) to describe(decision)
+        }
+
+        cases += decisionCase(
+            "K. the environment decision rejects a different value of the owned variable",
+        ) {
+            val wrongValue = NativeProcessRequest(
+                argv = envRequest.argv,
+                launchMode = LaunchMode.LINKER_LAUNCH,
+                workingDirectory = allowedWorkingDirectory,
+                environment = mapOf(
+                    NativeExecutionPolicy.BASE_ENVIRONMENT_VAR to "a value the policy never sets",
+                ),
+            )
+            val decision = NativeExecutionPolicy.decideBaseExecutionEnvironment(
+                wrongValue,
+                verifiedExecutable,
+                allowedWorkingDirectory,
+            )
+            isRejected(decision, NativeExecutionRejectionCode.ARGUMENTS_NOT_PERMITTED) to describe(decision)
+        }
+
+        cases += decisionCase(
+            "K. the environment decision rejects an extra user-injected variable",
+        ) {
+            val extraVar = NativeProcessRequest(
+                argv = envRequest.argv,
+                launchMode = LaunchMode.LINKER_LAUNCH,
+                workingDirectory = allowedWorkingDirectory,
+                environment = mapOf(
+                    NativeExecutionPolicy.BASE_ENVIRONMENT_VAR to
+                        NativeExecutionPolicy.BASE_ENVIRONMENT_MARKER,
+                    "USER_INJECTED" to "x",
+                ),
+            )
+            val decision = NativeExecutionPolicy.decideBaseExecutionEnvironment(
+                extraVar,
+                verifiedExecutable,
+                allowedWorkingDirectory,
+            )
+            isRejected(decision, NativeExecutionRejectionCode.ARGUMENTS_NOT_PERMITTED) to describe(decision)
+        }
+
+        cases += decisionCase(
+            "L. the environment decision requires the defined LINKER_LAUNCH mode (DIRECT rejected)",
+        ) {
+            val wrongMode = NativeProcessRequest(
+                argv = envRequest.argv,
+                launchMode = LaunchMode.DIRECT,
+                workingDirectory = allowedWorkingDirectory,
+                environment = NativeExecutionPolicy.baseExecutionEnvironmentOverrides,
+            )
+            val decision = NativeExecutionPolicy.decideBaseExecutionEnvironment(
+                wrongMode,
+                verifiedExecutable,
+                allowedWorkingDirectory,
+            )
+            isRejected(decision, NativeExecutionRejectionCode.EXECUTABLE_NOT_PERMITTED) to describe(decision)
+        }
+
+        cases += decisionCase(
+            "L. the environment decision rejects an arbitrary linker target",
+        ) {
+            val rogue = NativeProcessRequest(
+                argv = listOf(NativeExecutionPolicy.LINKER64_PATH, "/some/arbitrary/target"),
+                launchMode = LaunchMode.LINKER_LAUNCH,
+                workingDirectory = allowedWorkingDirectory,
+                environment = NativeExecutionPolicy.baseExecutionEnvironmentOverrides,
+            )
+            val decision = NativeExecutionPolicy.decideBaseExecutionEnvironment(
+                rogue,
+                verifiedExecutable,
+                allowedWorkingDirectory,
+            )
+            isRejected(decision, NativeExecutionRejectionCode.EXECUTABLE_NOT_PERMITTED) to describe(decision)
+        }
+
+        cases += decisionCase(
+            "L. the environment decision rejects extra user linker arguments",
+        ) {
+            val extraArg = NativeProcessRequest(
+                argv = listOf(
+                    NativeExecutionPolicy.LINKER64_PATH,
+                    verifiedExecutable.absolutePath,
+                    "user-injected-argument",
+                ),
+                launchMode = LaunchMode.LINKER_LAUNCH,
+                workingDirectory = allowedWorkingDirectory,
+                environment = NativeExecutionPolicy.baseExecutionEnvironmentOverrides,
+            )
+            val decision = NativeExecutionPolicy.decideBaseExecutionEnvironment(
+                extraArg,
+                verifiedExecutable,
+                allowedWorkingDirectory,
+            )
+            isRejected(decision, NativeExecutionRejectionCode.EXECUTABLE_NOT_PERMITTED) to describe(decision)
+        }
+
+        cases += decisionCase(
+            "M. the environment decision rejects an unexpected executable file name",
+        ) {
+            val other = File(verifiedRoot, "not-" + BaseUserspaceArtifact.EXECUTABLE_FILE)
+            val decision = NativeExecutionPolicy.decideBaseExecutionEnvironment(
+                envRequest,
+                other,
+                allowedWorkingDirectory,
+            )
+            isRejected(decision, NativeExecutionRejectionCode.EXECUTABLE_NOT_PERMITTED) to describe(decision)
+        }
+
+        cases += decisionCase(
+            "M. the environment decision pins the target to the verified installed executable path",
+        ) {
+            val foreign = File(FOREIGN_ROOT_PREFIX, BASE_SUBDIR)
+            val foreignExecutable = File(foreign, BaseUserspaceArtifact.EXECUTABLE_FILE)
+            val decision = NativeExecutionPolicy.decideBaseExecutionEnvironment(
+                envRequest,
+                foreignExecutable,
+                allowedWorkingDirectory,
+            )
+            isRejected(decision, NativeExecutionRejectionCode.EXECUTABLE_NOT_PERMITTED) to describe(decision)
+        }
+
+        cases += decisionCase(
+            "N. the environment decision rejects a stdin payload",
+        ) {
+            val withStdin = NativeProcessRequest(
+                argv = envRequest.argv,
+                launchMode = LaunchMode.LINKER_LAUNCH,
+                workingDirectory = allowedWorkingDirectory,
+                environment = NativeExecutionPolicy.baseExecutionEnvironmentOverrides,
+                stdinBytes = byteArrayOf(),
+            )
+            val decision = NativeExecutionPolicy.decideBaseExecutionEnvironment(
+                withStdin,
+                verifiedExecutable,
+                allowedWorkingDirectory,
+            )
+            isRejected(decision, NativeExecutionRejectionCode.ARGUMENTS_NOT_PERMITTED) to describe(decision)
+        }
+
+        cases += decisionCase(
+            "O. the ordinary policy never permits the environment request (no generic cwd/env runner)",
+        ) {
+            val decision = NativeExecutionPolicy.decide(envRequest)
+            isRejected(decision, NativeExecutionRejectionCode.EXECUTABLE_NOT_PERMITTED) to describe(decision)
         }
 
         return NativeExecutionPolicySelfCheckReport(cases)

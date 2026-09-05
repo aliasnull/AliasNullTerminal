@@ -166,44 +166,13 @@ jobs:
           sha256sum "$BIN" | tee build/userspace-probe/aliasnull_base_probe.sha256
           test -s build/userspace-probe/aliasnull_base_probe.sha256 || { echo "FAIL: SHA-256 not generated"; exit 1; }
 
-      # ---- Part 27-S2: the committed asset must be the reproducible binary ----
-      # The standalone build above re-derives the probe from the CURRENT source
-      # tree. CI must prove that the committed APK asset
-      # (app/src/main/assets/userspace/base/aliasnull_base_probe) is exactly what
-      # a fresh build produces, and that the BASE_EXECUTABLE_SHA256 manifest
-      # constant is that same hash. Any mismatch (asset drifted from source, or
-      # the manifest constant no longer describes the shipped binary) fails CI.
-      - name: Verify the committed asset reproduces the fresh build and matches the manifest constant
-        run: |
-          FRESH="build/userspace-probe/aliasnull_base_probe"
-          COMMITTED="app/src/main/assets/userspace/base/aliasnull_base_probe"
-          MANIFEST="app/src/main/java/app/aliasnull/shell/bootstrap/BaseUserspaceArtifact.kt"
-          CONST="$(grep -A1 'BASE_EXECUTABLE_SHA256' "$MANIFEST" | grep -oE '[0-9a-f]{64}' | head -n1)"
-          test -n "$CONST" || { echo "FAIL: BASE_EXECUTABLE_SHA256 constant not found in $MANIFEST"; exit 1; }
-          test -f "$COMMITTED" || { echo "FAIL: committed asset $COMMITTED is missing"; exit 1; }
-          FRESH_SHA="$(sha256sum "$FRESH" | awk '{print $1}')"
-          COMMITTED_SHA="$(sha256sum "$COMMITTED" | awk '{print $1}')"
-          echo "fresh build:     $FRESH_SHA"
-          echo "committed asset: $COMMITTED_SHA"
-          echo "manifest const:  $CONST"
-          test "$FRESH_SHA" = "$COMMITTED_SHA" \
-            || { echo "FAIL: a fresh build of the probe does not byte-match the committed asset (Part 27-S2)"; exit 1; }
-          test "$FRESH_SHA" = "$CONST" \
-            || { echo "FAIL: the probe hash does not match the BASE_EXECUTABLE_SHA256 manifest constant (Part 27-S2)"; exit 1; }
-          file "$COMMITTED"
-          file "$COMMITTED" | grep -q "ELF 64-bit" || { echo "FAIL: committed asset is not a 64-bit ELF"; exit 1; }
-          file "$COMMITTED" | grep -q "ARM aarch64" || { echo "FAIL: committed asset is not ARM AArch64"; exit 1; }
-          readelf -h "$COMMITTED" | grep -q "Machine:.*AArch64" || { echo "FAIL: committed asset machine is not AArch64"; exit 1; }
-          # Part 27-S2-PERM-FIX: a static assertion that the committed executable
-          # is INTENDED to be executable (it carries an exec bit in its stored
-          # mode). This proves packaging intent only - it does NOT prove that the
-          # Android/SELinux policy on a real device permits execve() of the file,
-          # which only the on-device Base Executable diagnostic can establish.
-          test -x "$COMMITTED" || { echo "FAIL: committed asset $COMMITTED is not stored as executable"; exit 1; }
-          test -x "$FRESH" || { echo "FAIL: fresh build $FRESH is not executable"; exit 1; }
-          echo "OK: committed base-userspace executable reproduces the fresh build and matches the manifest constant"
-          echo "note: stored-exec-bit asserted for packaging intent; Android runtime exec is verified only on a device"
-
+      # ---- Part 27-T1 regeneration bootstrap (TEMPORARY - reverted by the follow-up commit) ----
+      # The probe source changed in this commit, so the reproducibility gate below
+      # will (correctly) fail until the freshly built bytes are committed as the
+      # APK asset. To obtain exactly those bytes, provenance generation and the
+      # probe-artifact upload run BEFORE the gate in THIS commit only; the
+      # follow-up commit restores the gate-first order and commits the regenerated
+      # asset so a fresh build then reproduces it.
       - name: Generate provenance metadata
         run: |
           BIN="build/userspace-probe/aliasnull_base_probe"
@@ -241,6 +210,44 @@ jobs:
             build/userspace-probe/aliasnull_base_probe.sha256
             build/userspace-probe/aliasnull_base_probe.provenance.txt
           if-no-files-found: error
+
+      # ---- Part 27-S2: the committed asset must be the reproducible binary ----
+      # The standalone build above re-derives the probe from the CURRENT source
+      # tree. CI must prove that the committed APK asset
+      # (app/src/main/assets/userspace/base/aliasnull_base_probe) is exactly what
+      # a fresh build produces, and that the BASE_EXECUTABLE_SHA256 manifest
+      # constant is that same hash. Any mismatch (asset drifted from source, or
+      # the manifest constant no longer describes the shipped binary) fails CI.
+      - name: Verify the committed asset reproduces the fresh build and matches the manifest constant
+        run: |
+          FRESH="build/userspace-probe/aliasnull_base_probe"
+          COMMITTED="app/src/main/assets/userspace/base/aliasnull_base_probe"
+          MANIFEST="app/src/main/java/app/aliasnull/shell/bootstrap/BaseUserspaceArtifact.kt"
+          CONST="$(grep -A1 'BASE_EXECUTABLE_SHA256' "$MANIFEST" | grep -oE '[0-9a-f]{64}' | head -n1)"
+          test -n "$CONST" || { echo "FAIL: BASE_EXECUTABLE_SHA256 constant not found in $MANIFEST"; exit 1; }
+          test -f "$COMMITTED" || { echo "FAIL: committed asset $COMMITTED is missing"; exit 1; }
+          FRESH_SHA="$(sha256sum "$FRESH" | awk '{print $1}')"
+          COMMITTED_SHA="$(sha256sum "$COMMITTED" | awk '{print $1}')"
+          echo "fresh build:     $FRESH_SHA"
+          echo "committed asset: $COMMITTED_SHA"
+          echo "manifest const:  $CONST"
+          test "$FRESH_SHA" = "$COMMITTED_SHA" \
+            || { echo "FAIL: a fresh build of the probe does not byte-match the committed asset (Part 27-S2)"; exit 1; }
+          test "$FRESH_SHA" = "$CONST" \
+            || { echo "FAIL: the probe hash does not match the BASE_EXECUTABLE_SHA256 manifest constant (Part 27-S2)"; exit 1; }
+          file "$COMMITTED"
+          file "$COMMITTED" | grep -q "ELF 64-bit" || { echo "FAIL: committed asset is not a 64-bit ELF"; exit 1; }
+          file "$COMMITTED" | grep -q "ARM aarch64" || { echo "FAIL: committed asset is not ARM AArch64"; exit 1; }
+          readelf -h "$COMMITTED" | grep -q "Machine:.*AArch64" || { echo "FAIL: committed asset machine is not AArch64"; exit 1; }
+          # Part 27-S2-PERM-FIX: a static assertion that the committed executable
+          # is INTENDED to be executable (it carries an exec bit in its stored
+          # mode). This proves packaging intent only - it does NOT prove that the
+          # Android/SELinux policy on a real device permits execve() of the file,
+          # which only the on-device Base Executable diagnostic can establish.
+          test -x "$COMMITTED" || { echo "FAIL: committed asset $COMMITTED is not stored as executable"; exit 1; }
+          test -x "$FRESH" || { echo "FAIL: fresh build $FRESH is not executable"; exit 1; }
+          echo "OK: committed base-userspace executable reproduces the fresh build and matches the manifest constant"
+          echo "note: stored-exec-bit asserted for packaging intent; Android runtime exec is verified only on a device"
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4

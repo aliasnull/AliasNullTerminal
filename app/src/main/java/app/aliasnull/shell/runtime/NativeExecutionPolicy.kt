@@ -110,6 +110,38 @@ object NativeExecutionPolicy {
     const val BASE_USERSPACE_STDOUT_TOKEN = "AliasNull base userspace OK"
 
     /**
+     * The single AliasNull-owned environment override that selects the bundled
+     * base executable's controlled execution-environment mode (Part 27-T1): when
+     * the runtime launches the verified base executable with
+     * [baseExecutionEnvironmentOverrides] (exactly [BASE_ENVIRONMENT_VAR] =
+     * [BASE_ENVIRONMENT_MARKER]), the source-built probe prints its real working
+     * directory and the real override value instead of the default line. The name
+     * and marker are a fixed cross-language contract shared with
+     * `app/src/main/cpp/aliasnull_base_probe.cpp`. It is set only by the
+     * execution-environment layer for the single controlled diagnostic request,
+     * never by the UI or a user, and never in the ordinary base-executable
+     * launch (whose environment stays empty). The name does not begin with `LD_`,
+     * so it can never influence the dynamic loader.
+     */
+    const val BASE_ENVIRONMENT_VAR = "ALIASNULL_BASE_ENV"
+
+    /**
+     * The fixed value of [BASE_ENVIRONMENT_VAR] the controlled base-environment
+     * request passes and the probe echoes back on stdout. Must contain no '='
+     * and no newline (so it is a valid single environment value and a single
+     * deterministic stdout line).
+     */
+    const val BASE_ENVIRONMENT_MARKER = "AliasNull controlled base environment"
+
+    /**
+     * The deterministic first stdout line the bundled probe prints in its
+     * controlled execution-environment mode (Part 27-T1); the real cwd and the
+     * [BASE_ENVIRONMENT_VAR]=[BASE_ENVIRONMENT_MARKER] echo follow on the next
+     * two lines.
+     */
+    const val BASE_ENVIRONMENT_STDOUT_TOKEN = "AliasNull base environment OK"
+
+    /**
      * Canonical allowlisted invocations (Part 27-Q). Each is exactly one bare
      * argv that [decide] permits; naming them lets an internal diagnostic select
      * an authorized case without re-deriving argv lists and keeps [PERMITTED_ARGV]
@@ -207,6 +239,95 @@ object NativeExecutionPolicy {
                 NativeExecutionRejectionCode.ARGUMENTS_NOT_PERMITTED,
                 "The bundled base executable LINKER_LAUNCH must run as a bare argv; " +
                     "no working directory, environment or stdin is permitted.",
+            )
+        }
+        return NativeExecutionPolicyDecision.Allowed
+    }
+
+    /**
+     * The exact fixed environment override of the single controlled
+     * base-execution-environment request (Part 27-T1): exactly one AliasNull-owned
+     * variable, [BASE_ENVIRONMENT_VAR] = [BASE_ENVIRONMENT_MARKER], and nothing
+     * else. The bundled probe treats exactly this key/value as its controlled
+     * mode and echoes both back, so the request's environment is always derived
+     * from this single policy source - never from UI or user input - and the
+     * policy can reject any request carrying a different or extra variable.
+     */
+    val baseExecutionEnvironmentOverrides: Map<String, String>
+        get() = mapOf(BASE_ENVIRONMENT_VAR to BASE_ENVIRONMENT_MARKER)
+
+    /**
+     * Decides the single controlled base-execution-environment request (Part
+     * 27-T1), the sibling allowance to [decideBaseExecutable]: the SAME bundled
+     * [BaseUserspaceArtifact.EXECUTABLE_FILE] launched via the SAME
+     * [LaunchMode.LINKER_LAUNCH] host argv, but under the execution environment
+     * the runtime established - one controlled working directory
+     * ([allowedWorkingDirectory], the canonical path of the verified work dir the
+     * execution-environment layer prepared inside the verified base root) and one
+     * fixed environment override ([baseExecutionEnvironmentOverrides]). It is the
+     * ONLY decision that allows a working directory and that one environment on
+     * the bundled executable, so the controlled cwd/env can never be smuggled
+     * onto any other argv and no user-supplied cwd or variable can be selected.
+     *
+     * [installedBaseExecutable] is the installed bundled executable the caller
+     * derived from the verified base directory and [allowedWorkingDirectory] the
+     * single canonical working-directory path that call derived from the same
+     * verified root (both never UI input). [process] is Allowed only when its
+     * launch mode is [LaunchMode.LINKER_LAUNCH], its argv is exactly
+     * `[LINKER64_PATH, <that executable's absolute path>]`, its working directory
+     * is exactly [allowedWorkingDirectory], its environment is exactly
+     * [baseExecutionEnvironmentOverrides], and it carries no stdin. Every other
+     * shape - DIRECT mode, a different target, extra linker arguments, a missing,
+     * different or arbitrary working directory, a missing/different/extra
+     * environment variable, or a stdin payload - is rejected before native
+     * execution.
+     */
+    fun decideBaseExecutionEnvironment(
+        process: NativeProcessRequest,
+        installedBaseExecutable: File,
+        allowedWorkingDirectory: String,
+    ): NativeExecutionPolicyDecision {
+        if (installedBaseExecutable.name != BaseUserspaceArtifact.EXECUTABLE_FILE) {
+            return rejected(
+                NativeExecutionRejectionCode.EXECUTABLE_NOT_PERMITTED,
+                "The verified base executable must be the bundled " +
+                    "'${BaseUserspaceArtifact.EXECUTABLE_FILE}', not '${installedBaseExecutable.name}'.",
+            )
+        }
+        if (process.launchMode != LaunchMode.LINKER_LAUNCH) {
+            return rejected(
+                NativeExecutionRejectionCode.EXECUTABLE_NOT_PERMITTED,
+                "The controlled base-execution-environment launch must be LINKER_LAUNCH via " +
+                    "$LINKER64_PATH; direct execve() is not permitted on Android.",
+            )
+        }
+        val expected = listOf(LINKER64_PATH, installedBaseExecutable.absolutePath)
+        if (process.argv != expected) {
+            return rejected(
+                NativeExecutionRejectionCode.EXECUTABLE_NOT_PERMITTED,
+                "Only the bundled AliasNull base executable may run as the base-environment case, " +
+                    "as $LINKER64_PATH with exactly the verified executable as its argument; " +
+                    "got '${display(process.argv)}'.",
+            )
+        }
+        if (process.workingDirectory != allowedWorkingDirectory) {
+            return rejected(
+                NativeExecutionRejectionCode.ARGUMENTS_NOT_PERMITTED,
+                "The base-environment request must run in the single controlled working directory " +
+                    "'$allowedWorkingDirectory', not '${process.workingDirectory ?: "(none)"}'.",
+            )
+        }
+        if (process.environment != baseExecutionEnvironmentOverrides) {
+            return rejected(
+                NativeExecutionRejectionCode.ARGUMENTS_NOT_PERMITTED,
+                "The base-environment request must carry exactly the one AliasNull-owned override " +
+                    "'$BASE_ENVIRONMENT_VAR'; any other environment is rejected.",
+            )
+        }
+        if (process.stdinBytes != null) {
+            return rejected(
+                NativeExecutionRejectionCode.ARGUMENTS_NOT_PERMITTED,
+                "The base-environment request must not carry a stdin payload.",
             )
         }
         return NativeExecutionPolicyDecision.Allowed

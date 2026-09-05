@@ -612,25 +612,61 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
                     "no controlled native process was run.",
             )
         }
-        val execution = if (case == NativeProcessTestKind.BASE_USERSPACE_EXECUTABLE) {
-            // The bundled base-executable case (Part 27-S2): its defined launch
-            // mode is LINKER_LAUNCH, so the request argv is the fixed system
-            // linker host with the single verified installed executable as its
-            // argument, and the policy gate is
-            // [NativeExecutionPolicy.decideBaseExecutable], which re-checks the
-            // executable File name, the exact argv and the LINKER_LAUNCH mode, so
-            // only the installed bundled binary can ever run through this branch.
-            val installedRoot = baseUserspace.installedUserspaceRoot
-            NativeProcessExecutionSeam.execute(
-                case.request(installedRoot),
-                nativeRuntime,
-                Dispatchers.Default,
-                verifiedBaseExecutable = File(installedRoot, BaseUserspaceArtifact.EXECUTABLE_FILE),
-            )
-        } else {
-            NativeProcessExecutionSeam.execute(case.request(), nativeRuntime, Dispatchers.Default)
+        var preparedEnvironment: BaseExecutionEnvironment? = null
+        val execution = when (case) {
+            NativeProcessTestKind.BASE_USERSPACE_EXECUTABLE -> {
+                // The bundled base-executable case (Part 27-S2): its defined launch
+                // mode is LINKER_LAUNCH, so the request argv is the fixed system
+                // linker host with the single verified installed executable as its
+                // argument, and the policy gate is
+                // [NativeExecutionPolicy.decideBaseExecutable], which re-checks the
+                // executable File name, the exact argv and the LINKER_LAUNCH mode, so
+                // only the installed bundled binary can ever run through this branch.
+                val installedRoot = baseUserspace.installedUserspaceRoot
+                NativeProcessExecutionSeam.execute(
+                    case.request(installedRoot),
+                    nativeRuntime,
+                    Dispatchers.Default,
+                    verifiedBaseExecutable = File(installedRoot, BaseUserspaceArtifact.EXECUTABLE_FILE),
+                )
+            }
+            NativeProcessTestKind.BASE_EXECUTION_ENVIRONMENT -> {
+                // The controlled base-execution-environment case (Part 27-T1): the
+                // SAME bundled executable as above, but under the one execution
+                // environment established from the verified base userspace. The
+                // environment is prepared (working directory created/validated) only
+                // now, and only because the readiness gates above already verified the
+                // base userspace is installed - a failure to prepare it is reported as
+                // NotReady and no child is ever launched, so readiness is never
+                // inferred from directory existence alone.
+                val installedRoot = baseUserspace.installedUserspaceRoot
+                val prepared = BaseExecutionEnvironment.prepare(baseUserspaceRoot, installedRoot)
+                if (prepared is BaseExecutionEnvironmentResult.NotReady) {
+                    return NativeProcessTestResult.NotReady(
+                        kind = case,
+                        message = "The controlled base execution environment could not be " +
+                            "prepared (${prepared.reason}); no controlled process was run.",
+                    )
+                }
+                val environment = (prepared as BaseExecutionEnvironmentResult.Ready).environment
+                preparedEnvironment = environment
+                NativeProcessExecutionSeam.execute(
+                    case.request(environment),
+                    nativeRuntime,
+                    Dispatchers.Default,
+                    baseExecutionEnvironment = environment,
+                )
+            }
+            else -> {
+                NativeProcessExecutionSeam.execute(case.request(), nativeRuntime, Dispatchers.Default)
+            }
         }
-        val expectedMet = execution is NativeProcessExecutionResult.Executed && case.matches(execution.result)
+        val expectedMet = if (preparedEnvironment != null) {
+            execution is NativeProcessExecutionResult.Executed &&
+                case.matches(execution.result, preparedEnvironment)
+        } else {
+            execution is NativeProcessExecutionResult.Executed && case.matches(execution.result)
+        }
         return NativeProcessTestResult.Outcome(case, execution, expectedMet)
     }
 

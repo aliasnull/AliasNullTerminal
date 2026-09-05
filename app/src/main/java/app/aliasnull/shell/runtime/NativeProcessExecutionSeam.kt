@@ -54,28 +54,48 @@ object NativeProcessExecutionSeam {
      * argv. It must be the installed bundled executable derived from the verified
      * base directory - never UI input; for any other request it stays null and
      * the ordinary [NativeExecutionPolicy.decide] applies.
+     *
+     * [baseExecutionEnvironment], when non-null, marks [process] as the single
+     * controlled base-execution-environment case (Part 27-T1): the policy gate is
+     * then [NativeExecutionPolicy.decideBaseExecutionEnvironment], the sibling
+     * allowance that admits the SAME bundled executable's LINKER_LAUNCH argv but
+     * only under the [BaseExecutionEnvironment] the runtime established (its
+     * verified working directory and its one fixed environment override). It
+     * takes precedence over [verifiedBaseExecutable] when both are set and must be
+     * the model prepared from the verified base root - never UI input; for any
+     * other request both stay null and the ordinary [NativeExecutionPolicy.decide]
+     * applies.
      */
     suspend fun execute(
         process: NativeProcessRequest,
         runner: AliasNullNativeRuntime,
         dispatcher: CoroutineDispatcher = Dispatchers.Default,
         verifiedBaseExecutable: File? = null,
+        baseExecutionEnvironment: BaseExecutionEnvironment? = null,
     ): NativeProcessExecutionResult = withContext(dispatcher) {
-        executeBlocking(process, runner, verifiedBaseExecutable)
+        executeBlocking(process, runner, verifiedBaseExecutable, baseExecutionEnvironment)
     }
 
     /**
      * Blocking form of [execute]. MUST be called from a background thread and
      * never from the Android main/UI thread, because the native runner blocks
      * until the child terminates. Prefer the suspend [execute] form. See
-     * [execute] for the meaning of [verifiedBaseExecutable].
+     * [execute] for the meaning of [verifiedBaseExecutable] and
+     * [baseExecutionEnvironment].
      */
     fun executeBlocking(
         process: NativeProcessRequest,
         runner: AliasNullNativeRuntime,
         verifiedBaseExecutable: File? = null,
+        baseExecutionEnvironment: BaseExecutionEnvironment? = null,
     ): NativeProcessExecutionResult {
-        val decision = if (verifiedBaseExecutable != null) {
+        val decision = if (baseExecutionEnvironment != null) {
+            NativeExecutionPolicy.decideBaseExecutionEnvironment(
+                process,
+                baseExecutionEnvironment.installedExecutable,
+                baseExecutionEnvironment.workingDirectoryPath,
+            )
+        } else if (verifiedBaseExecutable != null) {
             NativeExecutionPolicy.decideBaseExecutable(process, verifiedBaseExecutable)
         } else {
             NativeExecutionPolicy.decide(process)
