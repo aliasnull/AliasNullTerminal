@@ -82,7 +82,7 @@ fun PackageTransactionTestPanel(
             val enabled = state.runningCase == null
             // Two rows of four keep the eight labels legible on a phone, matching
             // the native-panel button styling (equal-weight chips, monospace).
-            enumValues<PackageTransactionTestKind>().chunked(4).forEach { rowCases ->
+            enumValues<PackageTransactionTestKind>().toList().chunked(4).forEach { rowCases ->
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
