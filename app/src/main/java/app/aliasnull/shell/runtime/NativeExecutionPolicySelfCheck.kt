@@ -428,6 +428,254 @@ internal object NativeExecutionPolicySelfCheck {
             isRejected(decision, NativeExecutionRejectionCode.EXECUTABLE_NOT_PERMITTED) to describe(decision)
         }
 
+        // ---- Part 27-T2: the controlled base-digest decision ----
+        // These cases assert the sibling policy decision
+        // [NativeExecutionPolicy.decideBaseDigest] that the controlled base-digest
+        // case runs under. They are pure policy, exactly like the Part 27-T1 cases
+        // above: the decision inspects only the request's argv/mode/working-directory/
+        // environment shape and never touches the file system, so the deterministic
+        // stand-in installed root below never needs to exist on the device. The
+        // digest component's controlled root is conveyed ONLY by the one
+        // AliasNull-owned environment override - never by an argv argument, so no
+        // argument can be smuggled through the linker - and the request must name
+        // exactly the verified installed digest component, run in exactly the
+        // verified work directory, carry exactly that one override and no stdin.
+        val digestRoot = verifiedRoot
+        val digestExecutable = File(digestRoot, BaseUserspaceArtifact.DIGEST_EXECUTABLE_FILE)
+        val otherWorkingDirectory =
+            File(VERIFIED_ROOT_PREFIX, "elsewhere").absolutePath
+        val digestRequest = NativeProcessRequest(
+            argv = NativeExecutionPolicy.baseDigestInvocation(digestRoot),
+            launchMode = LaunchMode.LINKER_LAUNCH,
+            workingDirectory = allowedWorkingDirectory,
+            environment = NativeExecutionPolicy.baseDigestEnvironmentOverrides(digestRoot),
+        )
+
+        cases += decisionCase(
+            "P. the digest request is LINKER_LAUNCH with the fixed linker host argv and no root argument",
+        ) {
+            val expectedArgv = listOf(
+                NativeExecutionPolicy.LINKER64_PATH,
+                digestExecutable.absolutePath,
+            )
+            val expectedEnv = NativeExecutionPolicy.baseDigestEnvironmentOverrides(digestRoot)
+            (digestRequest.launchMode == LaunchMode.LINKER_LAUNCH &&
+                digestRequest.argv == expectedArgv &&
+                digestRequest.workingDirectory == allowedWorkingDirectory &&
+                digestRequest.environment == expectedEnv &&
+                digestRequest.stdinBytes == null
+                ) to
+                "mode=${digestRequest.launchMode} argv='${display(digestRequest.argv)}' " +
+                "cwd=${digestRequest.workingDirectory} env=$expectedEnv"
+        }
+
+        cases += decisionCase(
+            "P. the digest policy allows exactly the pinned base-digest request",
+        ) {
+            val decision = NativeExecutionPolicy.decideBaseDigest(
+                digestRequest,
+                digestExecutable,
+                allowedWorkingDirectory,
+                digestRoot,
+            )
+            (decision is NativeExecutionPolicyDecision.Allowed) to describe(decision)
+        }
+
+        cases += decisionCase(
+            "Q. the bare base-executable decision rejects the digest request (decisions stay distinct)",
+        ) {
+            val decision = NativeExecutionPolicy.decideBaseExecutable(digestRequest, digestExecutable)
+            isRejected(decision, NativeExecutionRejectionCode.ARGUMENTS_NOT_PERMITTED) to describe(decision)
+        }
+
+        cases += decisionCase(
+            "Q. the environment decision rejects the digest request (its override is not the env marker)",
+        ) {
+            val decision = NativeExecutionPolicy.decideBaseExecutionEnvironment(
+                digestRequest,
+                digestExecutable,
+                allowedWorkingDirectory,
+            )
+            isRejected(decision, NativeExecutionRejectionCode.ARGUMENTS_NOT_PERMITTED) to describe(decision)
+        }
+
+        cases += decisionCase(
+            "R. the digest decision rejects an unexpected component file name",
+        ) {
+            val other = File(verifiedRoot, "not-" + BaseUserspaceArtifact.DIGEST_EXECUTABLE_FILE)
+            val decision = NativeExecutionPolicy.decideBaseDigest(
+                digestRequest,
+                other,
+                allowedWorkingDirectory,
+                digestRoot,
+            )
+            isRejected(decision, NativeExecutionRejectionCode.EXECUTABLE_NOT_PERMITTED) to describe(decision)
+        }
+
+        cases += decisionCase(
+            "R. the digest decision pins the target to the verified installed component path",
+        ) {
+            val foreign = File(FOREIGN_ROOT_PREFIX, BASE_SUBDIR)
+            val foreignDigest = File(foreign, BaseUserspaceArtifact.DIGEST_EXECUTABLE_FILE)
+            val decision = NativeExecutionPolicy.decideBaseDigest(
+                digestRequest,
+                foreignDigest,
+                allowedWorkingDirectory,
+                digestRoot,
+            )
+            isRejected(decision, NativeExecutionRejectionCode.EXECUTABLE_NOT_PERMITTED) to describe(decision)
+        }
+
+        cases += decisionCase(
+            "S. the digest decision rejects an arbitrary linker target (no generic linker runner)",
+        ) {
+            val rogue = NativeProcessRequest(
+                argv = listOf(NativeExecutionPolicy.LINKER64_PATH, "/some/arbitrary/target"),
+                launchMode = LaunchMode.LINKER_LAUNCH,
+                workingDirectory = allowedWorkingDirectory,
+                environment = NativeExecutionPolicy.baseDigestEnvironmentOverrides(digestRoot),
+            )
+            val decision = NativeExecutionPolicy.decideBaseDigest(
+                rogue,
+                digestExecutable,
+                allowedWorkingDirectory,
+                digestRoot,
+            )
+            isRejected(decision, NativeExecutionRejectionCode.EXECUTABLE_NOT_PERMITTED) to describe(decision)
+        }
+
+        cases += decisionCase(
+            "S. the digest decision rejects a user-injected linker/root argument",
+        ) {
+            val extraArg = NativeProcessRequest(
+                argv = listOf(
+                    NativeExecutionPolicy.LINKER64_PATH,
+                    digestExecutable.absolutePath,
+                    "/some/user/controlled/root",
+                ),
+                launchMode = LaunchMode.LINKER_LAUNCH,
+                workingDirectory = allowedWorkingDirectory,
+                environment = NativeExecutionPolicy.baseDigestEnvironmentOverrides(digestRoot),
+            )
+            val decision = NativeExecutionPolicy.decideBaseDigest(
+                extraArg,
+                digestExecutable,
+                allowedWorkingDirectory,
+                digestRoot,
+            )
+            isRejected(decision, NativeExecutionRejectionCode.EXECUTABLE_NOT_PERMITTED) to describe(decision)
+        }
+
+        cases += decisionCase(
+            "T. the digest decision requires the defined LINKER_LAUNCH mode (DIRECT rejected)",
+        ) {
+            val wrongMode = NativeProcessRequest(
+                argv = NativeExecutionPolicy.baseDigestInvocation(digestRoot),
+                launchMode = LaunchMode.DIRECT,
+                workingDirectory = allowedWorkingDirectory,
+                environment = NativeExecutionPolicy.baseDigestEnvironmentOverrides(digestRoot),
+            )
+            val decision = NativeExecutionPolicy.decideBaseDigest(
+                wrongMode,
+                digestExecutable,
+                allowedWorkingDirectory,
+                digestRoot,
+            )
+            isRejected(decision, NativeExecutionRejectionCode.EXECUTABLE_NOT_PERMITTED) to describe(decision)
+        }
+
+        cases += decisionCase(
+            "T. the digest decision pins the working directory to the verified work dir",
+        ) {
+            val otherCwd = digestRequest.copy(workingDirectory = otherWorkingDirectory)
+            val decision = NativeExecutionPolicy.decideBaseDigest(
+                otherCwd,
+                digestExecutable,
+                allowedWorkingDirectory,
+                digestRoot,
+            )
+            isRejected(decision, NativeExecutionRejectionCode.ARGUMENTS_NOT_PERMITTED) to describe(decision)
+        }
+
+        cases += decisionCase(
+            "T. the digest decision requires a working directory (missing cwd rejected)",
+        ) {
+            val noCwd = digestRequest.copy(workingDirectory = null)
+            val decision = NativeExecutionPolicy.decideBaseDigest(
+                noCwd,
+                digestExecutable,
+                allowedWorkingDirectory,
+                digestRoot,
+            )
+            isRejected(decision, NativeExecutionRejectionCode.ARGUMENTS_NOT_PERMITTED) to describe(decision)
+        }
+
+        cases += decisionCase(
+            "U. the digest decision requires exactly the one override naming the verified root (missing env rejected)",
+        ) {
+            val noEnv = digestRequest.copy(environment = emptyMap())
+            val decision = NativeExecutionPolicy.decideBaseDigest(
+                noEnv,
+                digestExecutable,
+                allowedWorkingDirectory,
+                digestRoot,
+            )
+            isRejected(decision, NativeExecutionRejectionCode.ARGUMENTS_NOT_PERMITTED) to describe(decision)
+        }
+
+        cases += decisionCase(
+            "U. the digest decision rejects a root override that is not the verified installed root",
+        ) {
+            val wrongRoot = digestRequest.copy(
+                environment = NativeExecutionPolicy.baseDigestEnvironmentOverrides(
+                    File(FOREIGN_ROOT_PREFIX, BASE_SUBDIR),
+                ),
+            )
+            val decision = NativeExecutionPolicy.decideBaseDigest(
+                wrongRoot,
+                digestExecutable,
+                allowedWorkingDirectory,
+                digestRoot,
+            )
+            isRejected(decision, NativeExecutionRejectionCode.ARGUMENTS_NOT_PERMITTED) to describe(decision)
+        }
+
+        cases += decisionCase(
+            "U. the digest decision rejects an extra user-injected variable",
+        ) {
+            val extraVar = digestRequest.copy(
+                environment = NativeExecutionPolicy.baseDigestEnvironmentOverrides(digestRoot) +
+                    ("USER_INJECTED" to "x"),
+            )
+            val decision = NativeExecutionPolicy.decideBaseDigest(
+                extraVar,
+                digestExecutable,
+                allowedWorkingDirectory,
+                digestRoot,
+            )
+            isRejected(decision, NativeExecutionRejectionCode.ARGUMENTS_NOT_PERMITTED) to describe(decision)
+        }
+
+        cases += decisionCase(
+            "V. the digest decision rejects a stdin payload",
+        ) {
+            val withStdin = digestRequest.copy(stdinBytes = byteArrayOf())
+            val decision = NativeExecutionPolicy.decideBaseDigest(
+                withStdin,
+                digestExecutable,
+                allowedWorkingDirectory,
+                digestRoot,
+            )
+            isRejected(decision, NativeExecutionRejectionCode.ARGUMENTS_NOT_PERMITTED) to describe(decision)
+        }
+
+        cases += decisionCase(
+            "V. the ordinary policy never permits the digest request (no generic cwd/env runner)",
+        ) {
+            val decision = NativeExecutionPolicy.decide(digestRequest)
+            isRejected(decision, NativeExecutionRejectionCode.EXECUTABLE_NOT_PERMITTED) to describe(decision)
+        }
+
         return NativeExecutionPolicySelfCheckReport(cases)
     }
 

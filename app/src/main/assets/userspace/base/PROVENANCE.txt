@@ -1,5 +1,5 @@
 AliasNull base userspace artifact - provenance and scope
-(Part 27-R, Part 27-S2, Part 27-T1)
+(Part 27-R, Part 27-S2, Part 27-T1, Part 27-T2)
 
 Scope of this artifact
 ----------------------
@@ -48,14 +48,47 @@ userspace (Part 27-S2). Its provenance:
                     System.loadLibrary, and never part of libaliasnull_runtime.so
   - License:        AliasNull project source terms (see LICENSE.txt)
 
-The executable shipped in the APK is the exact artifact produced by the
-"Build AliasNull Android" CI workflow from the committed source above. Its
-source revision, CI run id and workflow, and its expected SHA-256 are recorded
-in the base-userspace artifact manifest (app/src/main/java/app/aliasnull/shell/
-bootstrap/BaseUserspaceArtifact.kt), which is the single source of truth for
-that digest - it is not silently hard-coded. CI fails if a fresh rebuild of the
-committed source does not reproduce the committed bytes, and the bootstrap
-verifies the digest, the 64-bit AArch64 ELF format and the executable
+aliasnull_digest is the second real executable component of the AliasNull base
+userspace and its first genuinely REUSABLE component (Part 27-T2): a
+read-only, dependency-free SHA-256 file-digest utility. Its provenance:
+
+  - Component:      aliasnull_digest
+  - Executable ver: 1
+  - Source file:    app/src/main/cpp/aliasnull_digest.cpp
+  - Source project: AliasNull (this repository)
+  - Build system:   CMake + Android NDK android.toolchain.cmake
+  - Toolchain NDK:  28.2.13676358 (NDK r28c)
+  - Target ABI:     arm64-v8a (AArch64, 64-bit)
+  - Android API:    26 (PIE executable, interpreter /system/bin/linker64)
+  - Output:         a controlled mode selected ONLY by the one AliasNull-owned
+                    environment override ALIASNULL_DIGEST_ROOT being exactly the
+                    absolute path of the verified installed base-userspace root
+                    (the digest's controlled root is never an argv argument, so
+                    no argument passes through the linker unverified): the
+                    component hashes exactly the installed base files (VERSION,
+                    ARCH, DESCRIPTION, PROVENANCE.txt, LICENSE.txt,
+                    aliasnull_base_probe, aliasnull_digest - the same files, in
+                    the same order, as the base manifest) and prints one
+                    "sha256  name" digest line per file, then exits 0. The Base
+                    Digest diagnostic asserts that output exactly against the
+                    manifest, so a real userspace executable must independently
+                    reproduce the bootstrap's manifest digests for the whole
+                    installed base. The SHA-256 is a FIPS 180-4 implementation
+                    authored in the source, not a cryptographic library; the
+                    component links only Bionic libc and never executes a
+                    command.
+  - Nature:         a normal executable; never a JNI library, never loaded with
+                    System.loadLibrary, and never part of libaliasnull_runtime.so
+  - License:        AliasNull project source terms (see LICENSE.txt)
+
+The executables shipped in the APK are the exact artifacts produced by the
+"Build AliasNull Android" CI workflow from the committed sources above. Their
+source revisions, CI run ids and workflows, and their expected SHA-256 digests
+are recorded in the base-userspace artifact manifest (app/src/main/java/app/
+aliasnull/shell/bootstrap/BaseUserspaceArtifact.kt), which is the single source
+of truth for those digests - they are not silently hard-coded. CI fails unless a
+fresh rebuild of each committed source reproduces the committed bytes, and the
+bootstrap verifies each digest, the 64-bit AArch64 ELF format and the executable
 permission before it reports the base userspace installed.
 
 Why each file is required
@@ -74,15 +107,18 @@ Why each file is required
                    exercised through the controlled developer-diagnostic test
                    panel (Base Executable / Base Environment), never through the
                    Shell command surface.
+  aliasnull_digest - the real 64-bit AArch64 SHA-256 file-digest component,
+                   exercised through the Base Digest diagnostic, never through
+                   the Shell command surface.
 
 No Android /system binaries are part of this artifact. The controlled native
 runtime tests (Echo/Stderr/Non-zero Exit/Launch Failure/Base Executable/Base
-Environment) run strictly internally for diagnostics; those host probes and this
-bundled executable are not general Shell commands.
+Environment/Base Digest) run strictly internally for diagnostics; those host
+probes and the bundled executables are not general Shell commands.
 
 Honest limitation
 -----------------
-This artifact deliberately contains exactly one executable and no shell, no
+This artifact deliberately contains exactly two executables and no shell, no
 general command runner, and no Linux userland. Python, Git, a package manager,
 and arbitrary command execution are NOT included; the AliasNull Shell still
 answers only its existing vocabulary (help/about/clear/echo) and reports unknown

@@ -1,37 +1,55 @@
 AliasNull base userspace - versioned foundation artifact.
 
 This is the first real, versioned AliasNull base-userspace artifact (Part 27-R,
-extended by Part 27-S2 and Part 27-T1). It is NOT a Linux filesystem, a rootfs
-image, a shell, a package manager, or a set of system tools. It is a minimal,
-honest, self-identifying foundation that AliasNull installs into its private
-runtime directory and verifies before the runtime reports ready.
+extended by Part 27-S2, Part 27-T1 and Part 27-T2). It is NOT a Linux
+filesystem, a rootfs image, a shell, a package manager, or a set of system
+tools. It is a minimal, honest, self-identifying foundation that AliasNull
+installs into its private runtime directory and verifies before the runtime
+reports ready.
 
-The artifact contains ONE real, source-built arm64 executable,
-aliasnull_base_probe: the first genuine executable component of the AliasNull
-base userspace. It is a small Android AArch64 PIE built from this repository
-(app/src/main/cpp/aliasnull_base_probe.cpp) with the Android NDK, bundled as an
-APK asset, and verified (SHA-256, 64-bit AArch64 ELF, executable permission)
-before the runtime reports ready.
+The artifact contains TWO real, source-built arm64 executables:
 
-The executable has two deterministic modes, selected solely by whether it is
-launched under the controlled base-execution environment (Part 27-T1):
+  aliasnull_base_probe - the first genuine executable component of the AliasNull
+    base userspace (Part 27-S2). A small Android AArch64 PIE built from this
+    repository (app/src/main/cpp/aliasnull_base_probe.cpp) with the Android
+    NDK. It has two deterministic modes, selected solely by whether it is
+    launched under the controlled base-execution environment (Part 27-T1):
 
-  - DEFAULT: prints "AliasNull base userspace OK" and exits 0 (unchanged since
-    Part 27-S2 - the base-executable diagnostic asserts this line).
-  - CONTROLLED ENVIRONMENT: when the app launches it with the one AliasNull-owned
-    environment override (ALIASNULL_BASE_ENV=<fixed marker>) and the controlled
-    working directory under the verified base userspace, it prints "AliasNull
-    base environment OK", then the real working directory ("cwd=<canonical path>")
-    and the override echoed back, then exits 0. The base-environment diagnostic
-    asserts those exact values, proving the controlled cwd and env were really
-    applied.
+      DEFAULT: prints "AliasNull base userspace OK" and exits 0 (unchanged
+        since Part 27-S2 - the base-executable diagnostic asserts this line).
+
+      CONTROLLED ENVIRONMENT: when the app launches it with the one
+        AliasNull-owned environment override (ALIASNULL_BASE_ENV=<fixed
+        marker>) and the controlled working directory under the verified base
+        userspace, it prints "AliasNull base environment OK", then the real
+        working directory ("cwd=<canonical path>") and the override echoed
+        back, then exits 0. The base-environment diagnostic asserts those
+        exact values, proving the controlled cwd and env were really applied.
+
+  aliasnull_digest - the first genuinely REUSABLE real component of the base
+    userspace (Part 27-T2): a dependency-free, read-only SHA-256 file-digest
+    tool. A small Android AArch64 PIE built from this repository
+    (app/src/main/cpp/aliasnull_digest.cpp) with the Android NDK; its SHA-256
+    comes from a FIPS 180-4 implementation authored in that source, not from any
+    cryptographic library, and it links only Bionic libc. It never executes a
+    command. Its controlled mode is selected by the one AliasNull-owned
+    environment override ALIASNULL_DIGEST_ROOT=<verified installed base root>:
+    the component hashes exactly the installed base files (VERSION, ARCH,
+    DESCRIPTION, PROVENANCE.txt, LICENSE.txt, aliasnull_base_probe,
+    aliasnull_digest - the same files, in the same order, as the base manifest)
+    and prints one deterministic "sha256  name" line per file, then exits 0.
+    The Base Digest diagnostic asserts that output exactly, proving a real
+    userspace executable independently reproduces the bootstrap's manifest
+    digests for the whole installed base. The digest tool itself is not a
+    general coreutils package and is not a Shell command; the app only ever
+    runs its controlled mode, never an arbitrary file set.
 
 It is NOT a shell, NOT a general command runner, and NOT a Linux userspace:
 AliasNull does not yet include Python, Git, a package manager, or arbitrary
-command execution, and unknown Shell commands stay unknown. The executable is
-exercised only through the controlled developer-diagnostic native runtime test
-panel (Base Executable / Base Environment), never through the Shell command
-surface.
+command execution, and unknown Shell commands stay unknown. The executables
+are exercised only through the controlled developer-diagnostic native runtime
+test panel (Base Executable / Base Environment / Base Digest), never through
+the Shell command surface.
 
 Contents of this artifact:
   VERSION              - the base artifact version (single source of truth)
@@ -40,10 +58,12 @@ Contents of this artifact:
   PROVENANCE.txt       - provenance and scope of every file in the artifact
   LICENSE.txt          - licensing note for the artifact files
   aliasnull_base_probe - the bundled 64-bit AArch64 base-userspace executable
+  aliasnull_digest     - the bundled 64-bit AArch64 file-digest component
 
 Version:   see VERSION
 Arch:      see ARCH
 Produced:  from the AliasNull repository and shipped inside the signed APK. The
-           executable is built from committed source by CI with the Android NDK
-           (see PROVENANCE.txt); its expected SHA-256 is recorded in the
-           base-userspace artifact manifest and is not silently hard-coded.
+           executables are built from committed source by CI with the Android
+           NDK (see PROVENANCE.txt); their expected SHA-256 digests are
+           recorded in the base-userspace artifact manifest and are not
+           silently hard-coded.

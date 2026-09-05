@@ -15,12 +15,14 @@ import java.io.File
  * is deliberately no way to pick an executable, an argument list, a working
  * directory, environment or stdin here: every host case maps to exactly one
  * allowlisted bare-argv invocation owned by [NativeExecutionPolicy]
- * ([NativeExecutionPolicy.ECHO_INVOCATION] and friends), and the two bundled
+ * ([NativeExecutionPolicy.ECHO_INVOCATION] and friends), and the bundled
  * base-userspace executable cases map to the single verified installed bundled
  * executable - [BASE_USERSPACE_EXECUTABLE] as its bare
  * [LaunchMode.LINKER_LAUNCH] argv via [NativeExecutionPolicy.decideBaseExecutable],
- * and [BASE_EXECUTION_ENVIRONMENT] under the controlled
- * [BaseExecutionEnvironment] via [NativeExecutionPolicy.decideBaseExecutionEnvironment] -
+ * [BASE_EXECUTION_ENVIRONMENT] under the controlled
+ * [BaseExecutionEnvironment] via [NativeExecutionPolicy.decideBaseExecutionEnvironment],
+ * and [BASE_DIGEST] under the controlled [BaseDigestEnvironment] via
+ * [NativeExecutionPolicy.decideBaseDigest] -
  * so a case can never smuggle an arbitrary request past the policy gate. The UI
  * labels come from [title]; the request is built internally ([request]).
  */
@@ -60,15 +62,36 @@ enum class NativeProcessTestKind(val title: String) {
      * probe then reports its real working directory and the override, proving the
      * environment was actually applied.
      */
-    BASE_EXECUTION_ENVIRONMENT("Base Environment");
+    BASE_EXECUTION_ENVIRONMENT("Base Environment"),
 
     /**
-     * True only for the two bundled base-executable cases (S2/T1), whose argv is
+     * The controlled base-digest case (Part 27-T2): the bundled AliasNull
+     * base-userspace SHA-256 file-digest component launched under the one
+     * execution environment [BaseDigestEnvironment] established from the verified
+     * base userspace - the controlled working directory and the one fixed
+     * AliasNull-owned environment override
+     * ([NativeExecutionPolicy.baseDigestEnvironmentOverrides]) naming the verified
+     * installed base root. Its request is built by [request] from that model
+     * (never from UI input), and the policy gate is
+     * [NativeExecutionPolicy.decideBaseDigest], so no user-supplied root, cwd,
+     * variable, target or argument can ever be selected. The component then
+     * hashes exactly the installed base files and prints one deterministic digest
+     * line per file; [NativeProcessTestKind.matches] validates that output
+     * strictly against [app.aliasnull.shell.bootstrap.BaseUserspaceArtifact.FILES],
+     * so a real userspace executable must independently reproduce the manifest
+     * digests for the installed base to pass.
+     */
+    BASE_DIGEST("Base Digest");
+
+    /**
+     * True only for the bundled base-executable cases (S2/T1/T2), whose argv is
      * pinned to the verified installed executable path and therefore cannot be a
      * bare policy invocation.
      */
     val isBundledBaseExecutable: Boolean
-        get() = this == BASE_USERSPACE_EXECUTABLE || this == BASE_EXECUTION_ENVIRONMENT
+        get() = this == BASE_USERSPACE_EXECUTABLE ||
+            this == BASE_EXECUTION_ENVIRONMENT ||
+            this == BASE_DIGEST
 
     /**
      * The exact allowlisted argv for this case, read from the single policy
@@ -90,6 +113,10 @@ enum class NativeProcessTestKind(val title: String) {
             BASE_EXECUTION_ENVIRONMENT -> throw IllegalStateException(
                 "The controlled base-execution-environment argv depends on the verified base " +
                     "userspace and its working directory; use request(environment) instead.",
+            )
+            BASE_DIGEST -> throw IllegalStateException(
+                "The controlled base-digest argv depends on the verified base userspace, its " +
+                    "working directory and its installed root; use request(digestEnvironment) instead.",
             )
         }
 
@@ -142,6 +169,31 @@ enum class NativeProcessTestKind(val title: String) {
     }
 
     /**
+     * The one structured request the controlled base-digest case authorizes
+     * (Part 27-T2): the bundled digest component's LINKER_LAUNCH argv
+     * ([NativeExecutionPolicy.baseDigestInvocation]) under the [environment] the
+     * digest-environment layer established from the verified base userspace - its
+     * controlled working directory ([BaseDigestEnvironment.workingDirectoryPath])
+     * and its one fixed environment override ([BaseDigestEnvironment.variables],
+     * which names the verified installed root as the digest's controlled root).
+     * [environment] is never UI input, and the policy gate re-checks the exact
+     * executable File name, argv, launch mode, working directory and environment
+     * before the runner runs, so the controlled root and cwd can never be smuggled
+     * onto any other argv.
+     */
+    internal fun request(environment: BaseDigestEnvironment): NativeProcessRequest {
+        require(this == BASE_DIGEST) {
+            "request(digestEnvironment) is only valid for the controlled base-digest case."
+        }
+        return NativeProcessRequest(
+            argv = NativeExecutionPolicy.baseDigestInvocation(environment.installedRoot),
+            launchMode = LaunchMode.LINKER_LAUNCH,
+            workingDirectory = environment.workingDirectoryPath,
+            environment = environment.variables,
+        )
+    }
+
+    /**
      * True only when [result] (the genuine native outcome the runner returned for
      * this case's argv) satisfies the case's stated expectation. For the three
      * launch cases this means EXITED with the expected streams/exit; for
@@ -178,6 +230,10 @@ enum class NativeProcessTestKind(val title: String) {
             "The controlled base-execution-environment expectation needs the controlled " +
                 "environment it ran under; use matches(result, environment).",
         )
+        BASE_DIGEST -> throw IllegalStateException(
+            "The controlled base-digest expectation needs the controlled digest environment " +
+                "it ran under; use matches(result, digestEnvironment).",
+        )
     }
 
     /**
@@ -208,6 +264,32 @@ enum class NativeProcessTestKind(val title: String) {
             result.stderr.isEmpty()
     }
 
+    /**
+     * True only when [result] satisfies the controlled base-digest case's stated
+     * expectation (Part 27-T2), judged against the genuine [environment] the
+     * request was executed under: the digest component EXITED 0, wrote nothing to
+     * stderr, and printed exactly one deterministic `<sha256>  <name>` line per
+     * installed base file - the same files, in the same order, as
+     * [BaseUserspaceArtifact.FILES] - with every digest equal to that manifest's
+     * expected value ([BaseDigestOutputValidator.baseDigestExpected]). A real
+     * userspace executable therefore must independently reproduce the bootstrap's
+     * manifest digests for the whole installed base; any deviation (missing,
+     * extra, duplicate, reordered or mismatched line, non-zero exit, stderr
+     * output) makes [expectedMet] false.
+     */
+    internal fun matches(result: NativeProcessResult, environment: BaseDigestEnvironment): Boolean {
+        require(this == BASE_DIGEST) {
+            "matches(result, digestEnvironment) is only valid for the controlled base-digest case."
+        }
+        return result.outcome == NativeProcessOutcome.EXITED &&
+            result.exitCode == 0 &&
+            result.stderr.isEmpty() &&
+            BaseDigestOutputValidator.validate(
+                BaseDigestOutputValidator.baseDigestExpected,
+                result.stdout,
+            ).valid
+    }
+
     /** Short, honest description of what [matches] checks; shown next to a result. */
     val expectationText: String
         get() = when (this) {
@@ -221,5 +303,8 @@ enum class NativeProcessTestKind(val title: String) {
                 "expected: exit 0, '${NativeExecutionPolicy.BASE_ENVIRONMENT_STDOUT_TOKEN}', the " +
                     "controlled working directory and '${NativeExecutionPolicy.BASE_ENVIRONMENT_VAR}=...' " +
                     "on stdout, nothing on stderr"
+            BASE_DIGEST ->
+                "expected: exit 0, one 'sha256  name' digest line per installed base file " +
+                    "matching the base manifest (in order), nothing on stderr"
         }
 }

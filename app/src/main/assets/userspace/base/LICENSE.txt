@@ -1,9 +1,14 @@
-License note for the AliasNull base-userspace artifact (Part 27-R)
+License note for the AliasNull base-userspace artifact (Part 27-R,
+extended by Part 27-S2 and Part 27-T2)
 
-The files in this artifact directory (VERSION, ARCH, DESCRIPTION,
-PROVENANCE.txt, LICENSE.txt) are original AliasNull-authored metadata and
-documentation produced from the AliasNull repository. They are not third-party
-code and do not bundle any external component, binary, or image.
+The documentation/metadata files in this artifact directory (VERSION, ARCH,
+DESCRIPTION, PROVENANCE.txt, LICENSE.txt) are original AliasNull-authored
+metadata and documentation produced from the AliasNull repository. The two
+executables (aliasnull_base_probe, aliasnull_digest) are original AliasNull
+source (app/src/main/cpp/*.cpp) built into arm64 ELF binaries by the CI
+workflow described in PROVENANCE.txt. None of these files are third-party code,
+and the artifact does not bundle any external component, binary, or image.
 
-They are distributed under the same terms as the AliasNull project source in
-which they live. Refer to the repository LICENSE for the applicable terms.
+All artifact files are distributed under the same terms as the AliasNull
+project source in which they live. Refer to the repository LICENSE for the
+applicable terms.

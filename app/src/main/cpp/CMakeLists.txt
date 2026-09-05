@@ -34,3 +34,18 @@ target_compile_features(aliasnull_runtime PRIVATE cxx_std_17)
 # milestone decides when (if ever) it joins the APK. It links only Bionic libc.
 add_executable(aliasnull_base_probe aliasnull_base_probe.cpp)
 target_compile_features(aliasnull_base_probe PRIVATE cxx_std_17)
+
+# Part 27-T2: the AliasNull base-userspace SHA-256 file-digest component.
+#
+# A NORMAL executable target (not SHARED, no JNI), exactly like
+# aliasnull_base_probe: AGP packages only SHARED libraries into the APK and this
+# target is never loaded with System.loadLibrary, so it has no effect on
+# libaliasnull_runtime.so or the APK. CI builds this target STANDALONE (its own
+# cmake configure into build/userspace-digest, decoupled from the AGP/Android
+# build) from the same NDK toolchain, validates it, and uploads the resulting
+# arm64 ELF as the committed base-userspace asset; the base bootstrap verifies
+# it (SHA-256, 64-bit AArch64 ELF, executable permission) like every other base
+# file. It links only Bionic libc. Its only job is to hash files read-only and
+# print deterministic SHA-256 lines; it is never a command executor.
+add_executable(aliasnull_digest aliasnull_digest.cpp)
+target_compile_features(aliasnull_digest PRIVATE cxx_std_17)

@@ -242,6 +242,135 @@ jobs:
             build/userspace-probe/aliasnull_base_probe.provenance.txt
           if-no-files-found: error
 
+      # ---- Part 27-T2: CI arm64 base-userspace digest component pipeline ----
+      # Builds the AliasNull base-userspace SHA-256 file-digest component
+      # (aliasnull_digest - the first genuinely reusable real base-userspace
+      # component) as a real AArch64 ELF PIE standalone from the same NDK
+      # 28.2.13676358 / CMake 3.22.1 toolchain the APK uses, validates it, hashes
+      # it, records provenance, and uploads it. Like the probe, it is a normal
+      # CMake executable target (never SHARED/JNI), is built only here standalone
+      # (never by the AGP/APK native build), and is exercised on a device only
+      # through the controlled Base Digest diagnostic. The SAME binary is the
+      # committed asset app/src/main/assets/userspace/base/aliasnull_digest
+      # (committed by the follow-up regeneration commit); the digest
+      # reproducibility gate below recomputes its SHA-256, which must equal the
+      # committed asset AND the BASE_DIGEST_SHA256 Kotlin manifest constant, so a
+      # rebuild of the digest source is proven byte-identical to what ships.
+      - name: Build AliasNull base userspace digest component (arm64-v8a)
+        run: |
+          export ANDROID_NDK_HOME="${ANDROID_SDK_ROOT}/ndk/28.2.13676358"
+          export ANDROID_NDK_ROOT="${ANDROID_SDK_ROOT}/ndk/28.2.13676358"
+          export PATH="${ANDROID_SDK_ROOT}/cmake/3.22.1/bin:${PATH}"
+          cmake -S app/src/main/cpp \
+                -B build/userspace-digest \
+                -G Ninja \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_TOOLCHAIN_FILE="${ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake" \
+                -DANDROID_ABI=arm64-v8a \
+                -DANDROID_PLATFORM=android-26
+          cmake --build build/userspace-digest --target aliasnull_digest
+
+      - name: Validate base userspace digest ELF / architecture
+        run: |
+          BIN="build/userspace-digest/aliasnull_digest"
+          test -f "$BIN" || { echo "FAIL: digest executable was not produced"; exit 1; }
+          test -s "$BIN" || { echo "FAIL: digest executable is empty"; exit 1; }
+          file "$BIN"
+          file "$BIN" | grep -q "ELF 64-bit" || { echo "FAIL: not a 64-bit ELF"; exit 1; }
+          file "$BIN" | grep -q "ARM aarch64" || { echo "FAIL: not ARM AArch64"; exit 1; }
+          file "$BIN" | grep -qE "pie executable|shared object" || { echo "FAIL: not an executable image"; exit 1; }
+          readelf -h "$BIN" | grep -q "Machine:.*AArch64" || { echo "FAIL: readelf machine is not AArch64"; exit 1; }
+          readelf -h "$BIN" | grep -q "Class:.*ELF64" || { echo "FAIL: readelf class is not ELF64"; exit 1; }
+          echo "OK: validated as a 64-bit AArch64 ELF executable"
+
+      - name: Compute SHA-256 of the base userspace digest component
+        run: |
+          BIN="build/userspace-digest/aliasnull_digest"
+          sha256sum "$BIN" | tee build/userspace-digest/aliasnull_digest.sha256
+          test -s build/userspace-digest/aliasnull_digest.sha256 || { echo "FAIL: SHA-256 not generated"; exit 1; }
+
+      # ---- Part 27-T2 regeneration bootstrap (TEMPORARY - reverted by the follow-up commit) ----
+      # The digest component is introduced by this commit but its committed asset
+      # and manifest digest are not yet present, so the reproducibility gate below
+      # will (correctly) fail until the freshly built bytes are committed as the
+      # APK asset and the manifest constant is set from this run. To obtain exactly
+      # those bytes, provenance generation and the digest-artifact upload run
+      # BEFORE the gate in THIS commit only; the follow-up commit restores the
+      # gate-first order and commits the regenerated asset and digest/provenance
+      # so a fresh build then reproduces them.
+      - name: Generate digest provenance metadata
+        run: |
+          BIN="build/userspace-digest/aliasnull_digest"
+          SHA="$(awk '{print $1}' build/userspace-digest/aliasnull_digest.sha256)"
+          SIZE="$(wc -c < "$BIN")"
+          PROV="build/userspace-digest/aliasnull_digest.provenance.txt"
+          {
+            echo "component: aliasnull_digest"
+            echo "executable_version: 1"
+            echo "source_repository: AliasNull (aliasnull/AliasNullTerminal)"
+            echo "source_revision: ${GITHUB_SHA}"
+            echo "source_file: app/src/main/cpp/aliasnull_digest.cpp"
+            echo "build_system: CMake + Android NDK android.toolchain.cmake"
+            echo "toolchain_ndk: 28.2.13676358"
+            echo "target_abi: arm64-v8a"
+            echo "target_arch: AArch64 (64-bit)"
+            echo "android_platform: 26"
+            echo "workflow: ${GITHUB_WORKFLOW}"
+            echo "run_id: ${GITHUB_RUN_ID}"
+            echo "run_url: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo "filename: aliasnull_digest"
+            echo "file_size_bytes: ${SIZE}"
+            echo "sha256: ${SHA}"
+            echo "license: AliasNull project source terms (see repository LICENSE)"
+          } > "$PROV"
+          cat "$PROV"
+          test -s "$PROV" || { echo "FAIL: digest provenance metadata not generated"; exit 1; }
+
+      - name: Upload base userspace digest artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: aliasnull-base-userspace-digest
+          path: |
+            build/userspace-digest/aliasnull_digest
+            build/userspace-digest/aliasnull_digest.sha256
+            build/userspace-digest/aliasnull_digest.provenance.txt
+          if-no-files-found: error
+
+      # ---- Part 27-T2: the committed asset must be the reproducible binary ----
+      # The standalone build above re-derives the digest component from the
+      # CURRENT source tree. CI must prove that the committed APK asset
+      # (app/src/main/assets/userspace/base/aliasnull_digest) is exactly what a
+      # fresh build produces, and that the BASE_DIGEST_SHA256 manifest constant is
+      # that same hash. Any mismatch (asset drifted from source, or the manifest
+      # constant no longer describes the shipped binary) fails CI. Until the
+      # follow-up regeneration commit lands, the committed asset is absent, so
+      # this gate fails as intended (the digest component is not yet bundled).
+      - name: Verify the committed digest asset reproduces the fresh build and matches the manifest constant
+        run: |
+          FRESH="build/userspace-digest/aliasnull_digest"
+          COMMITTED="app/src/main/assets/userspace/base/aliasnull_digest"
+          MANIFEST="app/src/main/java/app/aliasnull/shell/bootstrap/BaseUserspaceArtifact.kt"
+          CONST="$(grep -A1 'BASE_DIGEST_SHA256' "$MANIFEST" | grep -oE '[0-9a-f]{64}' | head -n1)"
+          test -n "$CONST" || { echo "FAIL: BASE_DIGEST_SHA256 constant not found in $MANIFEST"; exit 1; }
+          test -f "$COMMITTED" || { echo "FAIL: committed asset $COMMITTED is missing (Part 27-T2); commit the CI-built digest component"; exit 1; }
+          FRESH_SHA="$(sha256sum "$FRESH" | awk '{print $1}')"
+          COMMITTED_SHA="$(sha256sum "$COMMITTED" | awk '{print $1}')"
+          echo "fresh build:     $FRESH_SHA"
+          echo "committed asset: $COMMITTED_SHA"
+          echo "manifest const:  $CONST"
+          test "$FRESH_SHA" = "$COMMITTED_SHA" \
+            || { echo "FAIL: a fresh build of the digest component does not byte-match the committed asset (Part 27-T2)"; exit 1; }
+          test "$FRESH_SHA" = "$CONST" \
+            || { echo "FAIL: the digest hash does not match the BASE_DIGEST_SHA256 manifest constant (Part 27-T2)"; exit 1; }
+          file "$COMMITTED"
+          file "$COMMITTED" | grep -q "ELF 64-bit" || { echo "FAIL: committed digest asset is not a 64-bit ELF"; exit 1; }
+          file "$COMMITTED" | grep -q "ARM aarch64" || { echo "FAIL: committed digest asset is not ARM AArch64"; exit 1; }
+          readelf -h "$COMMITTED" | grep -q "Machine:.*AArch64" || { echo "FAIL: committed digest asset machine is not AArch64"; exit 1; }
+          test -x "$COMMITTED" || { echo "FAIL: committed asset $COMMITTED is not stored as executable"; exit 1; }
+          test -x "$FRESH" || { echo "FAIL: fresh build $FRESH is not executable"; exit 1; }
+          echo "OK: committed base-userspace digest component reproduces the fresh build and matches the manifest constant"
+          echo "note: stored-exec-bit asserted for packaging intent; Android runtime exec is verified only on a device"
+
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:

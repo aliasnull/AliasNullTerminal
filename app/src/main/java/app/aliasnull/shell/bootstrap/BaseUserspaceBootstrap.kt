@@ -255,9 +255,10 @@ class BaseUserspaceBootstrap(
 
     /**
      * Validates [root] as an installed/staged base tree against the authoritative
-     * manifest, including the bundled executable's permission and 64-bit AArch64
-     * ELF format. Every install and reuse decision consults this same check, so
-     * readiness can never depend on the executable merely existing.
+     * manifest, including every bundled executable's permission and 64-bit
+     * AArch64 ELF format (the probe since Part 27-S2 and the digest component
+     * since Part 27-T2). Every install and reuse decision consults this same
+     * check, so readiness can never depend on an executable merely existing.
      */
     private fun validateInstalledTree(root: File): BaseUserspaceTreeValidation =
         BaseUserspaceFiles.validateInstalledTree(
@@ -265,7 +266,10 @@ class BaseUserspaceBootstrap(
             manifest = BaseUserspaceArtifact.FILES,
             expectedVersion = BaseUserspaceArtifact.VERSION,
             expectedArch = BaseUserspaceArtifact.ARCH,
-            executableRelative = BaseUserspaceArtifact.EXECUTABLE_FILE,
+            executables = listOf(
+                BaseUserspaceArtifact.EXECUTABLE_FILE,
+                BaseUserspaceArtifact.DIGEST_EXECUTABLE_FILE,
+            ),
         )
 
     private fun ready(justInstalled: Boolean): BaseUserspaceResult =

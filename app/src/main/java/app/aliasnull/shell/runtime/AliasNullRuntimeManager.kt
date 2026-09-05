@@ -613,6 +613,7 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
             )
         }
         var preparedEnvironment: BaseExecutionEnvironment? = null
+        var preparedDigestEnvironment: BaseDigestEnvironment? = null
         val execution = when (case) {
             NativeProcessTestKind.BASE_USERSPACE_EXECUTABLE -> {
                 // The bundled base-executable case (Part 27-S2): its defined launch
@@ -657,16 +658,54 @@ class AliasNullRuntimeManager(application: Application) : ShellRuntimeManager {
                     baseExecutionEnvironment = environment,
                 )
             }
+            NativeProcessTestKind.BASE_DIGEST -> {
+                // The controlled base-digest case (Part 27-T2): the bundled
+                // digest component's defined launch mode is LINKER_LAUNCH, and its
+                // request argv is the fixed system linker host with the single
+                // verified installed digest component as its argument. The
+                // controlled root is NOT passed as an argument (no argument can be
+                // verified to pass through the linker before a real device); it is
+                // conveyed by the one AliasNull-owned environment override, and the
+                // digest-environment layer derives everything - the controlled
+                // working directory, the executable File, argv and that one
+                // environment override - from the verified base userspace. The
+                // policy gate is [NativeExecutionPolicy.decideBaseDigest], which
+                // re-checks the component File name, the exact argv, the
+                // LINKER_LAUNCH mode, the working directory and the environment, so
+                // only the installed bundled digest component can ever run through
+                // this branch, hashing only the verified installed base files.
+                val installedRoot = baseUserspace.installedUserspaceRoot
+                val prepared = BaseDigestEnvironment.prepare(baseUserspaceRoot, installedRoot)
+                if (prepared is BaseDigestEnvironmentResult.NotReady) {
+                    return NativeProcessTestResult.NotReady(
+                        kind = case,
+                        message = "The controlled base digest environment could not be " +
+                            "prepared (${prepared.reason}); no controlled process was run.",
+                    )
+                }
+                val environment = (prepared as BaseDigestEnvironmentResult.Ready).environment
+                preparedDigestEnvironment = environment
+                NativeProcessExecutionSeam.execute(
+                    case.request(environment),
+                    nativeRuntime,
+                    Dispatchers.Default,
+                    baseDigestEnvironment = environment,
+                )
+            }
             else -> {
                 NativeProcessExecutionSeam.execute(case.request(), nativeRuntime, Dispatchers.Default)
             }
         }
-        val expectedMet = if (preparedEnvironment != null) {
-            execution is NativeProcessExecutionResult.Executed &&
-                case.matches(execution.result, preparedEnvironment)
-        } else {
-            execution is NativeProcessExecutionResult.Executed && case.matches(execution.result)
-        }
+        val expectedMet =
+            if (preparedEnvironment != null) {
+                execution is NativeProcessExecutionResult.Executed &&
+                    case.matches(execution.result, preparedEnvironment)
+            } else if (preparedDigestEnvironment != null) {
+                execution is NativeProcessExecutionResult.Executed &&
+                    case.matches(execution.result, preparedDigestEnvironment)
+            } else {
+                execution is NativeProcessExecutionResult.Executed && case.matches(execution.result)
+            }
         return NativeProcessTestResult.Outcome(case, execution, expectedMet)
     }
 

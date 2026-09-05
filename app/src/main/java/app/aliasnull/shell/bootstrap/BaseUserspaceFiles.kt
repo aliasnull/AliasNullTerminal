@@ -21,11 +21,12 @@ data class BaseUserspaceTreeValidation(
     val versionMatches: Boolean = false,
     val archMatches: Boolean = false,
     /**
-     * A short reason the bundled executable is invalid (missing permission,
-     * wrong format, a symlink instead of a regular file), or null when it is
-     * valid or no executable was expected. Set only when [executableRelative]
-     * was passed to [validateInstalledTree]; readiness must not depend on the
-     * executable merely existing.
+     * A short reason a bundled executable is invalid (missing permission, wrong
+     * format, a symlink instead of a regular file), or null when every expected
+     * executable is valid or none was expected. Set only when [validateInstalledTree]
+     * was given [executables]; when more than one executable is invalid the
+     * reasons are joined. Readiness must not depend on an executable merely
+     * existing.
      */
     val executableError: String? = null,
 ) {
@@ -83,7 +84,9 @@ object BaseUserspaceFiles {
      * Validates [root] as an installed base-userspace tree: every [manifest] path
      * exists under [root] with the expected digest, and the VERSION/ARCH markers
      * equal [expectedVersion]/[expectedArch]. Reads only files whose relative
-     * paths are safe. Never mutates [root].
+     * paths are safe. Never mutates [root]. When [executables] is non-empty each
+     * is additionally validated as an owner-executable 64-bit AArch64 ELF (see
+     * [executableValidationError]).
      */
     fun validateInstalledTree(
         root: File,
@@ -92,7 +95,7 @@ object BaseUserspaceFiles {
         expectedArch: String,
         versionFile: String = BaseUserspaceArtifact.VERSION_FILE,
         archFile: String = BaseUserspaceArtifact.ARCH_FILE,
-        executableRelative: String? = null,
+        executables: List<String> = emptyList(),
     ): BaseUserspaceTreeValidation {
         val missing = mutableListOf<String>()
         val mismatched = mutableListOf<String>()
@@ -111,7 +114,10 @@ object BaseUserspaceFiles {
                 mismatched += relative
             }
         }
-        val executableError = executableRelative?.let { executableValidationError(root, it) }
+        val executableError = executables
+            .mapNotNull { executableValidationError(root, it) }
+            .joinToString("; ")
+            .ifEmpty { null }
         return BaseUserspaceTreeValidation(
             missingFiles = missing,
             mismatchedFiles = mismatched,

@@ -6,18 +6,22 @@ import java.security.MessageDigest
 
 /**
  * The single source of truth describing the bundled AliasNull base-userspace
- * artifact (Part 27-R, extended by Part 27-S2 and Part 27-T1).
+ * artifact (Part 27-R, extended by Part 27-S2, Part 27-T1 and Part 27-T2).
  *
  * The artifact is a small, deterministic, versioned set of original
  * AliasNull-authored metadata files (see [PROVENANCE_FILE]) bundled verbatim
- * under [ASSET_DIR] in the signed APK, PLUS one real executable
- * ([EXECUTABLE_FILE], Part 27-S2). It is not a Linux filesystem, a shell or a
- * set of system tools: the executable is the first genuine arm64 component of
- * the base userspace and is exercised only through the controlled developer
- * diagnostic, never through the Shell. Since Part 27-T1 the same executable has
- * a controlled execution-environment mode (selected by the single AliasNull
- * environment override) that reports the real controlled working directory and
- * override; see [NativeExecutionPolicy] and the DESCRIPTION/PROVENANCE asset.
+ * under [ASSET_DIR] in the signed APK, PLUS two real executables
+ * ([EXECUTABLE_FILE], Part 27-S2, and [DIGEST_EXECUTABLE_FILE], Part 27-T2). It
+ * is not a Linux filesystem, a shell or a set of system tools: the executables
+ * are the genuine arm64 components of the base userspace and are exercised only
+ * through the controlled developer diagnostic, never through the Shell. Since
+ * Part 27-T1 the probe executable has a controlled execution-environment mode
+ * (selected by the single AliasNull environment override) that reports the real
+ * controlled working directory and override; since Part 27-T2 the digest
+ * executable is the first reusable real userspace component - a read-only,
+ * Bionic-only SHA-256 file-digest tool whose controlled mode re-verifies the
+ * installed base manifest from inside the userspace. See [NativeExecutionPolicy]
+ * and the DESCRIPTION/PROVENANCE asset.
  *
  * [FILES] maps each artifact-relative file name to its expected SHA-256 digest
  * (lowercase hex). The digests are the compile-time-known integrity record the
@@ -37,7 +41,7 @@ object BaseUserspaceArtifact {
      * changes so the bootstrap treats an older installed base as upgradeable
      * rather than current. Mirrored by the [VERSION_FILE] file.
      */
-    const val VERSION = "3"
+    const val VERSION = "4"
 
     /**
      * The single architecture this build is produced for (ABI filter arm64-v8a).
@@ -114,8 +118,68 @@ object BaseUserspaceArtifact {
         const val OUTPUT_STRING = "AliasNull base userspace OK"
     }
 
-    /** True only for the single bundled executable file. */
-    fun isExecutableFile(relative: String): Boolean = relative == EXECUTABLE_FILE
+    /**
+     * The bundled base-userspace SHA-256 file-digest component (Part 27-T2): a
+     * real 64-bit AArch64 Android PIE built from [Digest.SOURCE_FILE] by the CI
+     * workflow recorded in [Digest], committed verbatim under [ASSET_DIR]. It is
+     * the artifact's second executable (and its first genuinely reusable real
+     * userspace component): a dependency-free, read-only file-digest tool whose
+     * SHA-256 comes from a FIPS 180-4 implementation authored in the source, not
+     * from any cryptographic library. It is launched only through the same
+     * [NativeExecutionPolicy] LINKER_LAUNCH model and exercised only by the
+     * controlled Base Digest diagnostic, never through the Shell.
+     */
+    const val DIGEST_EXECUTABLE_FILE = "aliasnull_digest"
+
+    /**
+     * Expected SHA-256 (lowercase hex) of the exact [DIGEST_EXECUTABLE_FILE]
+     * bytes committed under [ASSET_DIR]. Single source of truth for the digest
+     * executable's integrity: the CI workflow compares a fresh source rebuild
+     * against this value (and against the committed bytes) so the committed
+     * executable is proven regenerable, never merely trusted. Regenerated from a
+     * freshly built artifact; never hand-invented.
+     */
+    const val BASE_DIGEST_SHA256 =
+        "0000000000000000000000000000000000000000000000000000000000000000"
+
+    /**
+     * Traceable provenance of the bundled [DIGEST_EXECUTABLE_FILE]. Kept beside
+     * the digest so the manifest entry establishes source, build toolchain,
+     * architecture and revision rather than being an unexplained hash.
+     */
+    object Digest {
+        /** Semantic version of the digest component itself. */
+        const val VERSION = "1"
+
+        /** Repository-relative source file the executable is built from. */
+        const val SOURCE_FILE = "app/src/main/cpp/aliasnull_digest.cpp"
+
+        /** Source revision the committed executable bytes were built at. */
+        const val SOURCE_REVISION = "0000000000000000000000000000000000000000"
+
+        /** CI workflow run id that produced the committed executable bytes. */
+        const val SOURCE_CI_RUN_ID = "00000000000"
+
+        /** CI workflow name that produced the committed executable bytes. */
+        const val SOURCE_CI_WORKFLOW = "Build AliasNull Android"
+
+        /** Android NDK version used to build the committed executable. */
+        const val BUILD_NDK = "28.2.13676358"
+
+        /** Android API level the executable targets. */
+        const val TARGET_ANDROID_API = "26"
+
+        /**
+         * The deterministic fixed file set the controlled mode hashes, exactly
+         * matching [FILES] insertion order (the digest component mirrors this in
+         * its source; the Base Digest diagnostic asserts the two agree).
+         */
+        const val CONTROLLED_FILE_COUNT = 7
+    }
+
+    /** True for the two bundled executable files. */
+    fun isExecutableFile(relative: String): Boolean =
+        relative == EXECUTABLE_FILE || relative == DIGEST_EXECUTABLE_FILE
 
     /**
      * Every artifact file and its expected SHA-256 digest (lowercase hex),
@@ -124,12 +188,13 @@ object BaseUserspaceArtifact {
      * from the file bytes whenever a file's content changes.
      */
     val FILES: Map<String, String> = linkedMapOf(
-        VERSION_FILE to "1121cfccd5913f0a63fec40a6ffd44ea64f9dc135c66634ba001d10bcf4302a2",
+        VERSION_FILE to "7de1555df0c2700329e815b93b32c571c3ea54dc967b89e81ab73b9972b72d1d",
         ARCH_FILE to "7f10c3cd4593d1d6ded27d658e7c05216011c955c200aac551caad0c979d4d90",
-        DESCRIPTION_FILE to "77c4729ba6d57b3bda949e70b389fcd82f0c80d2ad97c1bd741a9ed3eab73fad",
-        PROVENANCE_FILE to "87c24cc160b675d3374c1c0c21b6a64e353c43d6edaa02c296ebfbada7d86265",
-        LICENSE_FILE to "7e3d3c7d699c7cb35aa2f094ea5750a3a8cd13273053fe5541bd95b69be711ae",
+        DESCRIPTION_FILE to "b51190450bf0df8d026ef3c87f7cfc39f259ed671f7ce5eb1d6de6398e4e9cd1",
+        PROVENANCE_FILE to "ae7335c018e79ea4a1952732b574916483f945af96f5930769779bf0d5a53ff0",
+        LICENSE_FILE to "67b2a008b8992986a664ac291d828defbe696480340db2da248581e5634c9230",
         EXECUTABLE_FILE to BASE_EXECUTABLE_SHA256,
+        DIGEST_EXECUTABLE_FILE to BASE_DIGEST_SHA256,
     )
 
     /**

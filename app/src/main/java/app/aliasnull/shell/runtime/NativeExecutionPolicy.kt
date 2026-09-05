@@ -142,6 +142,23 @@ object NativeExecutionPolicy {
     const val BASE_ENVIRONMENT_STDOUT_TOKEN = "AliasNull base environment OK"
 
     /**
+     * The single AliasNull-owned environment override that selects the bundled
+     * base-userspace digest component's controlled mode (Part 27-T2): when the
+     * runtime launches the verified digest executable with exactly
+     * [DIGEST_ROOT_ENV_VAR] = the verified installed base-userspace root's
+     * absolute path (see [baseDigestEnvironmentOverrides]), the source-built
+     * component hashes exactly the installed base files under that root and
+     * prints one deterministic `<sha256>  <name>` line per file instead of acting
+     * as a generic file-digest tool. The name and meaning are a fixed
+     * cross-language contract shared with `app/src/main/cpp/aliasnull_digest.cpp`.
+     * It is set only by the digest-environment layer for the single controlled
+     * diagnostic request, never by the UI or a user, and never in the ordinary
+     * base-digest launch. The name does not begin with `LD_`, so it can never
+     * influence the dynamic loader.
+     */
+    const val DIGEST_ROOT_ENV_VAR = "ALIASNULL_DIGEST_ROOT"
+
+    /**
      * Canonical allowlisted invocations (Part 27-Q). Each is exactly one bare
      * argv that [decide] permits; naming them lets an internal diagnostic select
      * an authorized case without re-deriving argv lists and keeps [PERMITTED_ARGV]
@@ -334,13 +351,134 @@ object NativeExecutionPolicy {
     }
 
     /**
+     * The exact argv that runs the bundled AliasNull base-userspace digest
+     * component through the system dynamic linker (the defined
+     * [LaunchMode.LINKER_LAUNCH] host argv), the sibling of
+     * [baseExecutableInvocation] for [BaseUserspaceArtifact.DIGEST_EXECUTABLE_FILE]:
+     * argv[0] is the fixed [LINKER64_PATH] and argv[1] is the installed absolute
+     * path of the digest component under [installedBaseUserspaceRoot].
+     * [installedBaseUserspaceRoot] must be the base-userspace directory the
+     * bootstrap verified (the runtime derives it from
+     * [app.aliasnull.shell.bootstrap.BaseUserspaceBootstrap.installedCheck]); it
+     * is never built from UI input. The digest component runs with NO command-line
+     * arguments - its controlled root is conveyed by the single environment
+     * override, never by argv - so no argument passes through the linker and no
+     * user-controlled path can ever be selected through this seam. A request
+     * built from this argv must declare [LaunchMode.LINKER_LAUNCH].
+     */
+    fun baseDigestInvocation(installedBaseUserspaceRoot: File): List<String> =
+        listOf(
+            LINKER64_PATH,
+            File(installedBaseUserspaceRoot, BaseUserspaceArtifact.DIGEST_EXECUTABLE_FILE).absolutePath,
+        )
+
+    /**
+     * The exact fixed environment override of the single controlled base-digest
+     * request (Part 27-T2): exactly one AliasNull-owned variable,
+     * [DIGEST_ROOT_ENV_VAR] = the absolute path of
+     * [installedBaseUserspaceRoot], and nothing else. The bundled digest
+     * component treats exactly this key/value as its controlled mode and hashes
+     * the installed base files under that root, so the request's environment is
+     * always derived from this single policy source and from the verified
+     * installed root - never from UI or user input - and the policy can reject
+     * any request carrying a different, extra or missing variable.
+     */
+    fun baseDigestEnvironmentOverrides(installedBaseUserspaceRoot: File): Map<String, String> =
+        mapOf(DIGEST_ROOT_ENV_VAR to installedBaseUserspaceRoot.absolutePath)
+
+    /**
+     * Decides the single controlled base-digest request (Part 27-T2), the
+     * sibling allowance to [decideBaseExecutionEnvironment] for the bundled
+     * [BaseUserspaceArtifact.DIGEST_EXECUTABLE_FILE]: that digest component
+     * launched via the same [LaunchMode.LINKER_LAUNCH] host argv pattern, but
+     * under the environment the runtime established - one controlled working
+     * directory ([allowedWorkingDirectory], the canonical path of the verified
+     * work dir the environment layer prepared inside the verified base root) and
+     * the one fixed environment override naming the verified installed base root
+     * ([allowedInstalledRoot], whose absolute path is the digest's controlled
+     * root). It is the ONLY decision that allows [LaunchMode.LINKER_LAUNCH] of
+     * the digest component with that working directory and that one environment,
+     * so the controlled root and cwd can never be smuggled onto any other argv
+     * and no user-supplied path or variable can be selected.
+     *
+     * [installedDigestExecutable] is the installed bundled digest component the
+     * caller derived from the verified base directory, [allowedWorkingDirectory]
+     * the single canonical working-directory path that call derived from the
+     * same verified root, and [allowedInstalledRoot] that same verified installed
+     * base root (all never UI input). [process] is Allowed only when its launch
+     * mode is [LaunchMode.LINKER_LAUNCH], its argv is exactly
+     * `[LINKER64_PATH, <that component's absolute path>]`, its working directory
+     * is exactly [allowedWorkingDirectory], its environment is exactly
+     * [baseDigestEnvironmentOverrides] of [allowedInstalledRoot], and it carries
+     * no stdin. Every other shape - DIRECT mode, a different target, extra
+     * linker arguments, a missing/different/arbitrary working directory, a
+     * missing/different/extra environment variable, or a stdin payload - is
+     * rejected before native execution.
+     */
+    fun decideBaseDigest(
+        process: NativeProcessRequest,
+        installedDigestExecutable: File,
+        allowedWorkingDirectory: String,
+        allowedInstalledRoot: File,
+    ): NativeExecutionPolicyDecision {
+        if (installedDigestExecutable.name != BaseUserspaceArtifact.DIGEST_EXECUTABLE_FILE) {
+            return rejected(
+                NativeExecutionRejectionCode.EXECUTABLE_NOT_PERMITTED,
+                "The verified base digest executable must be the bundled " +
+                    "'${BaseUserspaceArtifact.DIGEST_EXECUTABLE_FILE}', not " +
+                    "'${installedDigestExecutable.name}'.",
+            )
+        }
+        if (process.launchMode != LaunchMode.LINKER_LAUNCH) {
+            return rejected(
+                NativeExecutionRejectionCode.EXECUTABLE_NOT_PERMITTED,
+                "The controlled base-digest launch must be LINKER_LAUNCH via $LINKER64_PATH; " +
+                    "direct execve() is not permitted on Android.",
+            )
+        }
+        val expected = listOf(LINKER64_PATH, installedDigestExecutable.absolutePath)
+        if (process.argv != expected) {
+            return rejected(
+                NativeExecutionRejectionCode.EXECUTABLE_NOT_PERMITTED,
+                "Only the bundled AliasNull base digest component may run as the base-digest case, " +
+                    "as $LINKER64_PATH with exactly the verified component as its argument; " +
+                    "got '${display(process.argv)}'.",
+            )
+        }
+        if (process.workingDirectory != allowedWorkingDirectory) {
+            return rejected(
+                NativeExecutionRejectionCode.ARGUMENTS_NOT_PERMITTED,
+                "The base-digest request must run in the single controlled working directory " +
+                    "'$allowedWorkingDirectory', not '${process.workingDirectory ?: "(none)"}'.",
+            )
+        }
+        if (process.environment != baseDigestEnvironmentOverrides(allowedInstalledRoot)) {
+            return rejected(
+                NativeExecutionRejectionCode.ARGUMENTS_NOT_PERMITTED,
+                "The base-digest request must carry exactly the one AliasNull-owned override " +
+                    "'$DIGEST_ROOT_ENV_VAR' naming the verified installed base root; any other " +
+                    "environment is rejected.",
+            )
+        }
+        if (process.stdinBytes != null) {
+            return rejected(
+                NativeExecutionRejectionCode.ARGUMENTS_NOT_PERMITTED,
+                "The base-digest request must not carry a stdin payload.",
+            )
+        }
+        return NativeExecutionPolicyDecision.Allowed
+    }
+
+    /**
      * Decides whether [process] may reach the native runner. Total: every request
      * yields [Allowed] or [Rejected], never a throw.
      *
      * [process] is Allowed only as a bare [LaunchMode.DIRECT] request (no working
      * directory/environment/stdin) whose argv is one of [PERMITTED_ARGV]. Any
-     * [LaunchMode.LINKER_LAUNCH] request - the base executable's defined mode - is
-     * rejected here and may be approved only by [decideBaseExecutable], and
+     * [LaunchMode.LINKER_LAUNCH] request - the bundled base executables' defined
+     * mode - is rejected here and may be approved only by the verified
+     * base-executable decisions ([decideBaseExecutable],
+     * [decideBaseExecutionEnvironment], [decideBaseDigest]), and
      * [LINKER64_PATH] is never allowed as a DIRECT executable, so no generic
      * "run this through the system linker" request can ever pass this gate.
      */
@@ -356,7 +494,8 @@ object NativeExecutionPolicy {
             return rejected(
                 NativeExecutionRejectionCode.EXECUTABLE_NOT_PERMITTED,
                 "Only DIRECT launches pass the ordinary policy; a LINKER_LAUNCH request " +
-                    "is decided only for the single verified base executable by decideBaseExecutable.",
+                    "is decided only for the verified bundled base executables by the base " +
+                    "decisions (decideBaseExecutable / decideBaseExecutionEnvironment / decideBaseDigest).",
             )
         }
         if (argv[0] == LINKER64_PATH) {
